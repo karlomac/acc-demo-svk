@@ -18,10 +18,6 @@ Thumbs.db
 !.env.example
 !.env.test
 
-# PocketBase binary (self-hosted; gitignored except its README)
-pocketbase/*
-!pocketbase/README.md
-
 # Generated sample invoices
 data/sample/*.pdf
 data/sample/expected/*.json

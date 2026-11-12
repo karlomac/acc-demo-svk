@@ -17,7 +17,6 @@
 		"format": "prettier --write .",
 		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run",
-		"pb:serve": "./pocketbase/pocketbase serve --http=127.0.0.1:8090",
 		"pb:setup": "tsx scripts/setup-pocketbase.ts",
 		"samples:generate": "tsx scripts/generate-sample-invoices.ts",
 		"smoke": "tsx scripts/smoke-test.ts"

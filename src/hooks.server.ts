@@ -1,10 +1,12 @@
 import { redirect, type RequestEvent } from '@sveltejs/kit'
 import PocketBase from 'pocketbase'
 
+const PB_URL = import.meta.env.POCKETBASE_URL ?? 'http://127.0.0.1:8090'
+
 type Resolve = (event: RequestEvent) => Promise<Response>
 
 export const handle = async ({ event, resolve }: { event: RequestEvent; resolve: Resolve }): Promise<Response> => {
-	event.locals.pb = new PocketBase('http://127.0.0.1:8090')
+	event.locals.pb = new PocketBase(PB_URL)
 	event.locals.pb.authStore.loadFromCookie(event.request.headers.get('cookie') ?? '')
 	event.locals.user = null
 
@@ -26,7 +28,7 @@ export const handle = async ({ event, resolve }: { event: RequestEvent; resolve:
 	const cookie = event.locals.pb.authStore.exportToCookie({
 		httpOnly: true,
 		sameSite: 'Lax',
-		secure: false,
+		secure: PB_URL.startsWith('https'),
 		path: '/',
 	})
 	if (cookie) {

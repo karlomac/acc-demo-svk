@@ -16,7 +16,6 @@ type Env = {
 }
 
 const defaults: Partial<Env> = {
-  POCKETBASE_URL: 'http://127.0.0.1:8090',
   LLM_PROVIDER: 'mock',
   LLM_MODEL: 'claude-sonnet-5-5',
   ANTHROPIC_API_KEY: '',
@@ -36,7 +35,7 @@ function required(name: string): string {
 
 export function getConfig(): Env {
   return {
-    POCKETBASE_URL: process.env.POCKETBASE_URL ?? defaults.POCKETBASE_URL!,
+    POCKETBASE_URL: required('POCKETBASE_URL'),
     PB_SUPERUSER_EMAIL: required('PB_SUPERUSER_EMAIL'),
     PB_SUPERUSER_PASSWORD: required('PB_SUPERUSER_PASSWORD'),
     DEMO_USER_EMAIL: required('DEMO_USER_EMAIL'),
