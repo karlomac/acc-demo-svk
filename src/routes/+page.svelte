@@ -262,14 +262,14 @@
 	</div>
 
 	<!-- Dropzone Area -->
-	<form method="POST" action="?/upload" use:enhance>
+	<form method="POST" action="?/upload" enctype="multipart/form-data" use:enhance>
 		<div class="flex flex-col gap-space-sm">
 			<div
 				class={`relative rounded-xl bg-surface-container-low p-space-2xl text-center shadow-sm transition-all cursor-pointer ${showEmpty ? 'bg-surface-container-high' : 'hover:bg-surface-container-high'}`}
 				id="dropzone"
 				onclick={handleFileClick}
 			>
-				<input accept=".pdf" class="hidden" id="invoiceFileInput" multiple type="file" bind:this={fileInput} onchange={(e) => (e.target as HTMLInputElement).form?.requestSubmit()} />
+				<input accept=".pdf" class="hidden" id="invoiceFileInput" name="files" multiple type="file" bind:this={fileInput} onchange={(e) => (e.target as HTMLInputElement).form?.requestSubmit()} />
 				<div class="max-w-xl mx-auto flex flex-col items-center">
 					<div class="w-14 h-14 rounded-2xl bg-surface-container-lowest flex items-center justify-center text-primary shadow-sm mb-space-md group-hover:scale-105 transition-transform">
 						<span class="material-symbols-outlined text-[32px]">cloud_upload</span>

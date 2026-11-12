@@ -158,7 +158,7 @@ export async function processInvoice(id: string) {
 	})
 
 	// 7. GL suggestions
-	const accounts = await pb.collection('accounts').getFullList()
+	const accounts = await pb.collection('gl_accounts').getFullList()
 	const accountCodes = new Set(accounts.map((a: any) => a.code))
 	const lines = await pb.collection('invoice_lines').getFullList({
 		filter: pb.filter('invoice = {:id}', { id }),

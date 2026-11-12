@@ -16,7 +16,18 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		sort: '-seq',
 	})
 
-	return { invoice, lines, audit }
+	let po: any = null
+	if (invoice.po_number) {
+		try {
+			po = await pb.collection('purchase_orders').getFirstListItem(
+				pb.filter('po_number = {:n}', { n: invoice.po_number })
+			)
+		} catch {
+			po = null
+		}
+	}
+
+	return { invoice, lines, audit, po }
 }
 
 export const actions: Actions = {

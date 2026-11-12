@@ -10,6 +10,14 @@
 	const audit: any[] = $derived(data?.audit ?? [])
 
 	const validation: any[] = $derived(Array.isArray(invoice?.validation_json) ? invoice.validation_json : [])
+	const blockingFailures = $derived(
+		validation.filter((c: any) => c.status === 'fail' && c.severity === 'blocking')
+	)
+	const taxPct = $derived(
+		invoice?.subtotal ? ((invoice.tax / invoice.subtotal) * 100).toFixed(2) : null
+	)
+	const po: any = $derived(data?.po ?? null)
+	const overage = $derived(po ? invoice.total > po.total_amount : false)
 
 	let showPdfModal = $state(false)
 	let glDropdownOpen = $state(false)
@@ -80,10 +88,10 @@
 			<div class="flex items-center gap-space-sm text-secondary font-label-sm text-label-sm">
 				<span class="flex items-center gap-1">
 					<span class="material-symbols-outlined text-[15px]">schedule</span>
-					<span>SLA Timeout: 04h:28m</span>
+					<span>Issued: {dateLabel(invoice.invoice_date)}</span>
 				</span>
 				<span class="text-outline-variant">•</span>
-				<span>Batch: BTC-NOV-094</span>
+				<span>Terms: {dateLabel(invoice.payment_terms)}</span>
 			</div>
 		</div>
 		<div class="flex flex-wrap items-center justify-between gap-space-md pt-space-xs">
@@ -108,7 +116,7 @@
 					<span class="inline-flex items-center gap-1 px-2.5 py-1 text-on-surface font-label-sm text-label-sm">
 						<span class="material-symbols-outlined text-[16px] text-primary">description</span>
 						{invoice.original_filename}
-						<span class="text-secondary">(1.4 MB)</span>
+						
 					</span>
 					<button class="p-1 px-2 text-on-surface-variant hover:text-primary hover:bg-surface-container rounded-r-lg transition-colors" type="button" title="Download Original">
 						<span class="material-symbols-outlined text-[18px]">download</span>
@@ -127,11 +135,11 @@
 				</div>
 				<div class="flex-1 min-w-0">
 					<div class="flex items-center justify-between gap-space-sm">
-						<span class="font-headline-sm text-headline-sm text-on-error-container">Validation Alert: 2 blocking validation errors detected</span>
-						<span class="px-2 py-0.5 rounded bg-surface-container-lowest/80 text-on-error-container font-label-sm text-label-sm uppercase tracking-wider">Halt Code: ERR_PO_CEILING</span>
+						<span class="font-headline-sm text-headline-sm text-on-error-container">Validation Alert: {blockingFailures.length} blocking validation error(s) detected</span>
+						<span class="px-2 py-0.5 rounded bg-surface-container-lowest/80 text-on-error-container font-label-sm text-label-sm uppercase tracking-wider">Halt Code: {blockingFailures[0]?.id ?? '—'}</span>
 					</div>
 					<p class="font-body-md text-body-md text-on-error-container/90 mt-space-xs">
-						Auto-approval halted. Invoice total exceeds PO purchase authorization ceiling and Line 3 GL classification fell below the automated 85% confidence threshold. Review diagnostics below before committing changes.
+						Auto-approval halted. {blockingFailures.map((c: any) => c.title).join('; ') || 'One or more blocking checks failed.'} Review diagnostics below before committing changes.
 					</p>
 				</div>
 			</div>
@@ -156,7 +164,7 @@
 		<div class="p-space-lg rounded-xl bg-surface-container-lowest shadow-sm flex flex-col justify-between">
 			<div>
 				<div class="flex items-center justify-between text-secondary">
-					<span class="font-label-sm text-label-sm uppercase tracking-wider">Tax (VAT 9.24%)</span>
+					<span class="font-label-sm text-label-sm uppercase tracking-wider">Tax{taxPct ? ` (${taxPct}%)` : ''}</span>
 					<span class="material-symbols-outlined text-[18px]">percent</span>
 				</div>
 				<div class="font-display-lg text-display-lg text-on-surface mt-space-xs tabular-nums">{money(invoice.tax)}</div>
@@ -177,7 +185,7 @@
 			</div>
 			<div class="mt-space-md flex items-center justify-between text-primary-fixed font-label-md text-label-md">
 				<span>Settlement Currency: USD</span>
-				<span class="font-semibold text-surface-container-lowest bg-surface-container-lowest/20 px-2 py-0.5 rounded">Due in 14 days</span>
+				{#if invoice.due_date}<span class="font-semibold text-surface-container-lowest bg-surface-container-lowest/20 px-2 py-0.5 rounded">Due {dateLabel(invoice.due_date)}</span>{/if}
 			</div>
 		</div>
 	</div>
@@ -198,14 +206,14 @@
 				</div>
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md pt-space-sm">
 					<div class="p-space-sm rounded-lg bg-surface-container-low flex flex-col">
-						<span class="font-label-sm text-label-sm text-secondary uppercase">Vendor Name & Tax ID</span>
+						<span class="font-label-sm text-label-sm text-secondary uppercase">Vendor</span>
 						<span class="font-body-lg text-body-lg text-on-surface font-semibold mt-0.5">{invoice.vendor_name}</span>
-						<span class="font-label-md text-label-md text-on-surface-variant">Tax ID: GB987214981</span>
+						<span class="font-label-md text-label-md text-on-surface-variant">Currency: {invoice.currency ?? '—'}</span>
 					</div>
 					<div class="p-space-sm rounded-lg bg-surface-container-low flex flex-col">
 						<span class="font-label-sm text-label-sm text-secondary uppercase">Invoice Identification</span>
 						<span class="font-body-lg text-body-lg text-on-surface font-semibold mt-0.5">{invoice.invoice_number}</span>
-						<span class="font-label-md text-label-md text-secondary">System Ref: #LL-88319-V</span>
+						<span class="font-label-md text-label-md text-secondary">Ref: #{invoice.id?.slice(0, 8).toUpperCase()}</span>
 					</div>
 					<div class="p-space-sm rounded-lg bg-surface-container-low flex flex-col">
 						<span class="font-label-sm text-label-sm text-secondary uppercase">Issue & Maturity Schedule</span>
@@ -216,13 +224,22 @@
 						</div>
 						<span class="font-label-md text-label-md text-secondary">Terms: {dateLabel(invoice.payment_terms)}</span>
 					</div>
-					<div class="p-space-sm rounded-lg bg-error-container/40 flex flex-col">
+					<div class={`p-space-sm rounded-lg flex flex-col ${overage ? 'bg-error-container/40' : 'bg-surface-container-low'}`}>
 						<div class="flex items-center justify-between">
-							<span class="font-label-sm text-label-sm text-error uppercase font-semibold">Purchase Order Match</span>
-							<span class="material-symbols-outlined text-error text-[16px]">warning</span>
+							<span class={`font-label-sm text-label-sm uppercase font-semibold ${overage ? 'text-error' : 'text-secondary'}`}>Purchase Order Match</span>
+							<span class={`material-symbols-outlined text-[16px] ${overage ? 'text-error' : 'text-primary'}`}>{overage ? 'warning' : 'verified'}</span>
 						</div>
 						<span class="font-body-lg text-body-lg text-on-surface font-semibold mt-0.5">{dateLabel(invoice.po_number)}</span>
-						<span class="font-label-md text-label-md text-error font-semibold">Ceiling: $3,500.00 (Overage: +$312.40)</span>
+						{#if po}
+							<span class={`font-label-md text-label-md font-semibold ${overage ? 'text-error' : 'text-on-surface-variant'}`}>
+								Ceiling: {money(po.total_amount)}
+								{#if overage}(Overage: +{money(invoice.total - po.total_amount)}){:else}· Within authorized ceiling{/if}
+							</span>
+						{:else}
+							<span class="font-label-md text-label-md text-on-surface-variant flex items-center gap-1">
+								<span class="material-symbols-outlined text-[14px]">check</span> No PO match required
+							</span>
+						{/if}
 					</div>
 				</div>
 			</div>
@@ -457,7 +474,7 @@
 					</div>
 					<div class="flex items-center gap-2">
 						<span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-container px-2 py-1 rounded">
-							Auditor: sarah.chen@acmecorp.com
+							Auditor: {data?.user?.email ?? 'system'}
 						</span>
 					</div>
 				</div>
@@ -577,7 +594,7 @@
 					<div class="flex items-center gap-2">
 						<span class="material-symbols-outlined text-primary text-[20px]">picture_as_pdf</span>
 						<span class="font-headline-sm text-headline-sm text-on-surface">{invoice.original_filename}</span>
-						<span class="text-secondary font-label-sm text-label-sm">(1.4 MB • Rendered in High-Res PDF.js)</span>
+						<span class="text-secondary font-label-sm text-label-sm">Rendered preview</span>
 					</div>
 					<button
 						class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-container transition-colors"
@@ -593,8 +610,7 @@
 						<div class="flex justify-between items-start">
 							<div>
 								<h3 class="font-headline-lg text-headline-lg font-bold text-on-surface">{invoice.vendor_name}</h3>
-								<p class="text-secondary font-body-sm text-body-sm">1 More London Place, London, SE1 2AF</p>
-								<p class="text-secondary font-body-sm text-body-sm">VAT Reg: GB987214981</p>
+								<p class="text-secondary font-body-sm text-body-sm">Currency: {invoice.currency ?? '—'}</p>
 							</div>
 							<div class="text-right">
 								<span class="font-headline-sm text-headline-sm text-secondary uppercase">TAX INVOICE</span>
@@ -625,7 +641,7 @@
 								<span class="font-numeric-table text-numeric-table text-on-surface">{money(invoice.subtotal)}</span>
 							</div>
 							<div class="flex justify-between w-48 text-secondary">
-								<span>VAT (9.24%):</span>
+								<span>Tax{taxPct ? ` (${taxPct}%)` : ''}:</span>
 								<span class="font-numeric-table text-numeric-table text-on-surface">{money(invoice.tax)}</span>
 							</div>
 							<div class="flex justify-between w-48 font-headline-sm text-headline-sm text-on-surface font-bold pt-2">

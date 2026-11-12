@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { redirect, type RequestEvent } from '@sveltejs/kit'
 import PocketBase from 'pocketbase'
 

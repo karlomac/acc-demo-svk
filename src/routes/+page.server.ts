@@ -36,7 +36,7 @@ export const actions: Actions = {
 				ok = false
 				error = 'File exceeds 10 MB'
 			} else {
-				const header = await file.slice(0, 5).arrayBuffer()
+				const header = await file.slice(0, 4).arrayBuffer()
 				const magic = String.fromCharCode(...new Uint8Array(header))
 				if (magic !== '%PDF') {
 					ok = false

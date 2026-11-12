@@ -3,6 +3,12 @@
 
 	let { data } = $props()
 	const audit: any[] = $derived(data?.audit ?? [])
+	let openRow = $state<string | null>(null)
+
+	function pretty(v: unknown) {
+		if (v === undefined || v === null || v === '') return 'null'
+		return JSON.stringify(v, null, 2)
+	}
 
 	function money(n: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n ?? 0)
@@ -210,7 +216,7 @@
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-surface-container-high font-body-sm text-body-sm text-on-surface">
-					{#each audit as entry}
+					{#each audit as entry (entry.id)}
 						<tr class="hover:bg-surface-container transition-colors group">
 							<td class="py-3.5 px-4 font-numeric-table text-numeric-table text-on-surface whitespace-nowrap">
 								{entry.ts?.slice(0, 10)} <span class="text-on-surface-variant">{entry.ts?.slice(11, 19)}</span>
@@ -248,12 +254,67 @@
 								<button
 									class="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container-low hover:bg-surface-container text-on-surface font-label-sm text-label-sm transition-colors"
 									type="button"
+									onclick={() => (openRow = openRow === entry.id ? null : entry.id)}
 								>
-									<span class="material-symbols-outlined text-[16px]">visibility</span>
-									<span>View</span>
+									<span class="material-symbols-outlined text-[16px]">
+										{openRow === entry.id ? 'close' : 'visibility'}
+									</span>
+									<span>{openRow === entry.id ? 'Hide' : 'View'}</span>
 								</button>
 							</td>
 						</tr>
+						{#if openRow === entry.id}
+							<tr class="bg-surface-container-low">
+								<td class="p-0" colspan="6">
+									<div class="p-space-lg flex flex-col gap-space-md">
+										<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm">
+											<div class="flex items-center gap-space-sm font-label-md text-label-md text-on-surface min-w-0">
+												<span class="material-symbols-outlined text-primary text-[18px]">verified_user</span>
+												<span class="font-semibold">Event payload: #{entry.seq ?? '—'}</span>
+												<span class="text-on-surface-variant font-normal truncate font-numeric-table text-numeric-table">
+													• SHA-256: {entry.hash}
+												</span>
+											</div>
+											<span class="px-2 py-0.5 rounded bg-surface-container-high text-on-surface font-label-sm text-label-sm shrink-0">
+												Immutable Log Record
+											</span>
+										</div>
+										<div class="grid grid-cols-1 lg:grid-cols-3 gap-space-md">
+											<div class="bg-surface-container-lowest p-space-md rounded-lg shadow-sm flex flex-col gap-space-xs">
+												<div class="flex items-center gap-1 font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+													<span class="material-symbols-outlined text-[14px]">history</span>
+													<span>State: Before</span>
+												</div>
+												<pre class="p-2 rounded bg-surface-container-low font-numeric-table text-numeric-table text-on-surface overflow-x-auto">{pretty(entry.before)}</pre>
+											</div>
+											<div class="bg-surface-container-lowest p-space-md rounded-lg shadow-sm flex flex-col gap-space-xs">
+												<div class="flex items-center gap-1 font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+													<span class="material-symbols-outlined text-[14px]">update</span>
+													<span>State: After</span>
+												</div>
+												<pre class="p-2 rounded bg-surface-container-low font-numeric-table text-numeric-table text-on-surface overflow-x-auto">{pretty(entry.after)}</pre>
+											</div>
+											<div class="bg-surface-container-lowest p-space-md rounded-lg shadow-sm flex flex-col gap-space-xs">
+												<div class="flex items-center gap-1 font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+													<span class="material-symbols-outlined text-[14px]">policy</span>
+													<span>Metadata & Trace</span>
+												</div>
+												<pre class="p-2 rounded bg-surface-container-low font-numeric-table text-numeric-table text-on-surface overflow-x-auto">{pretty(entry.meta)}</pre>
+											</div>
+										</div>
+										<details class="group bg-surface-container-lowest rounded-lg p-space-md">
+											<summary class="cursor-pointer font-label-sm text-label-sm text-on-surface-variant flex items-center justify-between select-none">
+												<span class="flex items-center gap-1 font-semibold text-on-surface">
+													<span class="material-symbols-outlined text-[16px] group-open:rotate-90 transition-transform">chevron_right</span>
+													View canonical raw audit object (JSON)
+												</span>
+											</summary>
+											<pre class="mt-3 p-3 rounded bg-inverse-surface text-inverse-on-surface font-numeric-table text-numeric-table overflow-x-auto leading-relaxed">{pretty(entry)}</pre>
+										</details>
+									</div>
+								</td>
+							</tr>
+						{/if}
 					{:else}
 						<tr>
 							<td colspan="6" class="py-8 text-center text-secondary">No audit records yet.</td>
