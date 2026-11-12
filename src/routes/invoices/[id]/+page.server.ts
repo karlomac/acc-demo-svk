@@ -2,11 +2,14 @@ import type { Actions, PageServerLoad } from './$types'
 import { fail, redirect } from '@sveltejs/kit'
 import { getAdminPb } from '../../../lib/server/pb-admin'
 import { appendAudit } from '../../../lib/server/core/audit'
+import { isReviewable } from '../../../lib/status'
+import { claimDecision, DecisionConflict, releaseDecision } from '../../../lib/server/core/decisions'
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const pb = locals.pb
 
 	const invoice = await pb.collection('invoices').getOne(params.id)
+	if (invoice.deleted_at) throw redirect(303, '/')
 	const lines = await pb.collection('invoice_lines').getFullList({
 		filter: pb.filter('invoice = {:id}', { id: params.id }),
 		sort: 'line_no',
@@ -37,19 +40,43 @@ export const actions: Actions = {
 		const note = (formData.get('note') as string) ?? ''
 
 		const before = await pb.collection('invoices').getOne(params.id)
-		await pb.collection('invoices').update(params.id, {
-			status: 'approved',
-			reviewer_note: note || null,
-			reviewed_by: locals.user?.email ?? 'system',
-			reviewed_at: new Date().toISOString(),
-		})
-		await appendAudit(pb, {
-			event: 'invoice.approved',
-			actor: `user:${locals.user?.email ?? 'system'}`,
-			invoice: params.id,
-			before: { status: before.status },
-			after: { status: 'approved', reviewer_note: note || null },
-		})
+		if (before.deleted_at) return fail(400, { error: 'This invoice has been deleted.' })
+		if (!isReviewable(before.status)) {
+			return fail(400, { error: `Cannot approve an invoice in "${before.status}" state.` })
+		}
+		if (formData.get('gaap') !== 'true') {
+			return fail(400, { error: 'Confirm the GAAP / purchase-order review checkbox before approving.' })
+		}
+		const actor = locals.user?.email ?? 'system'
+		let claim: any
+		try {
+			claim = await claimDecision(pb, params.id, 'approve', actor, note)
+		} catch (err) {
+			if (err instanceof DecisionConflict) {
+				return fail(409, {
+					error: `Already decided by ${err.existing.actor} (${err.existing.action}) at ${err.existing.decided_at}.`,
+				})
+			}
+			throw err
+		}
+		try {
+			await pb.collection('invoices').update(params.id, {
+				status: 'approved',
+				reviewer_note: note || null,
+				reviewed_by: actor,
+				reviewed_at: new Date().toISOString(),
+			})
+			await appendAudit(pb, {
+				event: 'invoice.approved',
+				actor: `user:${actor}`,
+				invoice: params.id,
+				before: { status: before.status },
+				after: { status: 'approved', reviewer_note: note || null },
+			})
+		} catch (err) {
+			await releaseDecision(pb, claim.id)
+			throw err
+		}
 		return { ok: true }
 	},
 
@@ -59,19 +86,40 @@ export const actions: Actions = {
 		const note = (formData.get('note') as string) ?? ''
 
 		const before = await pb.collection('invoices').getOne(params.id)
-		await pb.collection('invoices').update(params.id, {
-			status: 'rejected',
-			reviewer_note: note || null,
-			reviewed_by: locals.user?.email ?? 'system',
-			reviewed_at: new Date().toISOString(),
-		})
-		await appendAudit(pb, {
-			event: 'invoice.rejected',
-			actor: `user:${locals.user?.email ?? 'system'}`,
-			invoice: params.id,
-			before: { status: before.status },
-			after: { status: 'rejected', reviewer_note: note || null },
-		})
+		if (before.deleted_at) return fail(400, { error: 'This invoice has been deleted.' })
+		if (!isReviewable(before.status)) {
+			return fail(400, { error: `Cannot reject an invoice in "${before.status}" state.` })
+		}
+		const actor = locals.user?.email ?? 'system'
+		let claim: any
+		try {
+			claim = await claimDecision(pb, params.id, 'reject', actor, note)
+		} catch (err) {
+			if (err instanceof DecisionConflict) {
+				return fail(409, {
+					error: `Already decided by ${err.existing.actor} (${err.existing.action}) at ${err.existing.decided_at}.`,
+				})
+			}
+			throw err
+		}
+		try {
+			await pb.collection('invoices').update(params.id, {
+				status: 'rejected',
+				reviewer_note: note || null,
+				reviewed_by: actor,
+				reviewed_at: new Date().toISOString(),
+			})
+			await appendAudit(pb, {
+				event: 'invoice.rejected',
+				actor: `user:${actor}`,
+				invoice: params.id,
+				before: { status: before.status },
+				after: { status: 'rejected', reviewer_note: note || null },
+			})
+		} catch (err) {
+			await releaseDecision(pb, claim.id)
+			throw err
+		}
 		return { ok: true }
 	},
 

@@ -3,6 +3,7 @@
 	import { invalidateAll } from '$app/navigation'
 	import { goto } from '$app/navigation'
 	import { resolve } from '$app/paths'
+	import { isReviewable } from '../../../lib/status'
 
 	let { data, form } = $props()
 	const invoice: any = $derived(data?.invoice)
@@ -493,6 +494,8 @@
 				<div class="flex items-start gap-space-sm p-space-md rounded-lg bg-surface-container-low">
 					<input
 						id="gaap-confirm"
+						name="gaap"
+						value="true"
 						type="checkbox"
 						class="mt-1 w-4 h-4 rounded text-primary focus:ring-primary cursor-pointer accent-primary"
 					/>
@@ -500,11 +503,22 @@
 						I confirm all GL coding classifications are compliant with GAAP standards and the associated purchase order delta has been reviewed with controller guidelines.
 					</label>
 				</div>
+				{#if form?.error}
+					<div class="rounded-lg bg-error-container text-on-error-container px-space-md py-space-sm font-body-sm text-body-sm">
+						{form.error}
+					</div>
+				{/if}
+				{#if !isReviewable(invoice.status)}
+					<div class="rounded-lg bg-surface-container text-on-surface-variant px-space-md py-space-sm font-body-sm text-body-sm">
+						This invoice is <strong>{statusLabel(invoice.status)}</strong> and can no longer be approved or rejected.
+					</div>
+				{/if}
 				<div class="flex flex-wrap items-center justify-between gap-space-md pt-space-xs">
 					<div class="flex items-center gap-space-sm">
 						<button
 							type="submit"
-							class="px-5 py-2.5 rounded-lg bg-[#15803D] hover:bg-[#166534] text-white font-headline-sm text-headline-sm shadow-sm inline-flex items-center gap-2 transition-colors"
+							disabled={!isReviewable(invoice.status)}
+							class="px-5 py-2.5 rounded-lg bg-[#15803D] hover:bg-[#166534] text-white font-headline-sm text-headline-sm shadow-sm inline-flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 						>
 							<span class="material-symbols-outlined text-[20px]">check_circle</span>
 							Approve Invoice
@@ -512,7 +526,8 @@
 						<button
 							formaction="?/reject"
 							type="submit"
-							class="px-5 py-2.5 rounded-lg bg-[#B91C1C] hover:bg-[#991B1B] text-white font-headline-sm text-headline-sm shadow-sm inline-flex items-center gap-2 transition-colors"
+							disabled={!isReviewable(invoice.status)}
+							class="px-5 py-2.5 rounded-lg bg-[#B91C1C] hover:bg-[#991B1B] text-white font-headline-sm text-headline-sm shadow-sm inline-flex items-center gap-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
 						>
 							<span class="material-symbols-outlined text-[20px]">cancel</span>
 							Reject Invoice

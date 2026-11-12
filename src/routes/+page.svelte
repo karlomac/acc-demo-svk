@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms'
+	import { enhance, deserialize } from '$app/forms'
 	import { invalidateAll } from '$app/navigation'
 	import { goto } from '$app/navigation'
 
@@ -7,6 +7,14 @@
 	const invoices: any[] = $derived((data?.invoices ?? []).slice())
 
 	let filter = $state('all')
+	let search = $state('')
+	let vendorFilter = $state('all')
+	let amountFilter = $state('any')
+	let statusFilter = $state('all')
+	let page = $state(1)
+	let pageSize = $state(6)
+	let selected = $state<string[]>([])
+	let batchBusy = $state(false)
 	let pendingProcess = $state<string[]>([])
 	const processedSet = new Set<string>()
 	let statusText = $state('')
@@ -20,12 +28,110 @@
 		approved: invoices.filter((i) => i.status === 'approved').length,
 	})
 
+	const vendors = $derived(
+		[...new Set(invoices.map((i) => i.vendor_name).filter(Boolean))].sort() as string[]
+	)
+
 	const filtered = $derived(
 		invoices.filter((i) => {
-			if (filter === 'all') return true
-			if (filter === 'review') return i.status === 'needs_review'
-			return i.status === filter
+			if (filter === 'review' && i.status !== 'needs_review') return false
+			if (filter === 'flagged' && i.status !== 'flagged') return false
+			if (filter === 'approved' && i.status !== 'approved') return false
+			if (statusFilter !== 'all' && i.status !== statusFilter) return false
+			if (vendorFilter !== 'all' && i.vendor_name !== vendorFilter) return false
+			const total = Number(i.total ?? 0)
+			if (amountFilter === 'lt5000' && total >= 5000) return false
+			if (amountFilter === '5to20' && (total < 5000 || total > 20000)) return false
+			if (amountFilter === 'gt20000' && total <= 20000) return false
+			const q = search.trim().toLowerCase()
+			if (q) {
+				const hay = `${i.invoice_number ?? ''} ${i.vendor_name ?? ''} ${i.po_number ?? ''}`.toLowerCase()
+				if (!hay.includes(q)) return false
+			}
+			return true
 		})
+	)
+
+	const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)))
+	const currentPage = $derived(Math.min(page, totalPages))
+	const pageRows = $derived(filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize))
+	const rangeStart = $derived(filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1)
+	const rangeEnd = $derived(Math.min(currentPage * pageSize, filtered.length))
+	const pageButtons = $derived.by(() => {
+		const total = totalPages
+		if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1) as (number | string)[]
+		const out: (number | string)[] = [1]
+		const start = Math.max(2, currentPage - 1)
+		const end = Math.min(total - 1, currentPage + 1)
+		if (start > 2) out.push('…')
+		for (let i = start; i <= end; i++) out.push(i)
+		if (end < total - 1) out.push('…')
+		out.push(total)
+		return out
+	})
+
+	const allOnPage = $derived(
+		pageRows.length > 0 && pageRows.every((i: any) => selected.includes(i.id))
+	)
+
+	function toggleAll(checked: boolean) {
+		selected = checked ? pageRows.map((i: any) => i.id) : []
+	}
+
+	async function runBatch(action: 'approve' | 'flag') {
+		if (selected.length === 0 || batchBusy) return
+		batchBusy = true
+		const fd = new FormData()
+		fd.append('action', action)
+		for (const id of selected) fd.append('ids', id)
+		try {
+			const res = await fetch('?/batch', { method: 'POST', body: fd })
+			const result = deserialize(await res.text())
+			if (result.type === 'failure') {
+				alert((result.data as { error?: string })?.error ?? 'Batch action failed')
+			} else if (result.type === 'success') {
+				const skipped = (result.data as { skipped?: unknown[] })?.skipped ?? []
+				if (skipped.length > 0) {
+					alert(`${skipped.length} invoice(s) skipped — not in a reviewable state.`)
+				}
+			}
+		} finally {
+			selected = []
+			batchBusy = false
+			await invalidateAll()
+		}
+	}
+
+	function skipSelected() {
+		selected = []
+	}
+
+	function onKeydown(e: KeyboardEvent) {
+		const t = e.target as HTMLInputElement | null
+		const typing =
+			t &&
+			(t.tagName === 'TEXTAREA' ||
+				t.tagName === 'SELECT' ||
+				t.isContentEditable ||
+				(t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(t.type)))
+		if (typing) return
+		if (e.metaKey || e.ctrlKey || e.altKey) return
+		if (selected.length === 0) return
+		const key = e.key.toLowerCase()
+		if (key === 'a') {
+			e.preventDefault()
+			runBatch('approve')
+		} else if (key === 'f') {
+			e.preventDefault()
+			runBatch('flag')
+		} else if (key === 's') {
+			e.preventDefault()
+			skipSelected()
+		}
+	}
+
+	const filtersActive = $derived(
+		filter !== 'all' || statusFilter !== 'all' || vendorFilter !== 'all' || amountFilter !== 'any' || search.trim() !== ''
 	)
 
 	function failedChecks(validationJson: any, blocking: boolean) {
@@ -107,6 +213,16 @@
 		if (filter === active) return `${base} bg-surface-container-lowest text-on-surface`
 		return `${base} text-secondary hover:text-on-surface`
 	}
+
+	$effect(() => {
+		filter
+		search
+		vendorFilter
+		amountFilter
+		statusFilter
+		pageSize
+		page = 1
+	})
 
 	$effect(() => {
 		const ids = Array.isArray(form?.ids) ? (form.ids as string[]) : []
@@ -353,20 +469,46 @@
 						id="searchInput"
 						placeholder="Search invoice #, vendor, PO..."
 						type="text"
+						bind:value={search}
 					/>
 				</div>
 				<div class="relative">
-					<select class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer">
-						<option>All Vendors</option>
+					<select
+						class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer"
+						bind:value={statusFilter}
+					>
+						<option value="all">Status: All</option>
+						<option value="uploaded">Uploaded</option>
+						<option value="processing">Processing</option>
+						<option value="needs_review">Needs review</option>
+						<option value="flagged">Flagged</option>
+						<option value="approved">Approved</option>
+						<option value="rejected">Rejected</option>
+						<option value="error">Error</option>
 					</select>
 					<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2.5 pointer-events-none">expand_more</span>
 				</div>
 				<div class="relative">
-					<select class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer">
-						<option>Amount: Any</option>
-						<option>&lt; $5,000</option>
-						<option>$5,000 - $20,000</option>
-						<option>&gt; $20,000</option>
+					<select
+						class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer"
+						bind:value={vendorFilter}
+					>
+						<option value="all">All Vendors</option>
+						{#each vendors as vendor}
+							<option value={vendor}>{vendor}</option>
+						{/each}
+					</select>
+					<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2.5 pointer-events-none">expand_more</span>
+				</div>
+				<div class="relative">
+					<select
+						class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer"
+						bind:value={amountFilter}
+					>
+						<option value="any">Amount: Any</option>
+						<option value="lt5000">&lt; $5,000</option>
+						<option value="5to20">$5,000 - $20,000</option>
+						<option value="gt20000">&gt; $20,000</option>
 					</select>
 					<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2.5 pointer-events-none">expand_more</span>
 				</div>
@@ -383,7 +525,7 @@
 			</div>
 		</div>
 
-		{#if showEmpty && filtered.length === 0}
+		{#if showEmpty}
 			<!-- Empty State View -->
 			<div class="rounded-xl bg-surface-container-lowest p-space-2xl text-center shadow-sm flex flex-col items-center justify-center" id="emptyStateContainer">
 				<div class="w-16 h-16 rounded-2xl bg-surface-container flex items-center justify-center text-secondary mb-space-md">
@@ -391,7 +533,11 @@
 				</div>
 				<h3 class="font-headline-sm text-headline-sm text-on-surface">No invoices in this queue</h3>
 				<p class="font-body-sm text-body-sm text-secondary mt-1 max-w-sm">
-					No invoices yet. Upload a PDF to get started or clear your filter criteria to see all processed documents.
+					{#if filtersActive}
+						No invoices match your search or filters. Clear the filters to see all processed documents.
+					{:else}
+						No invoices yet. Upload a PDF to get started.
+					{/if}
 				</p>
 				<button
 					class="mt-space-lg px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md inline-flex items-center gap-2 shadow-sm hover:bg-on-primary-fixed-variant transition-colors"
@@ -413,7 +559,13 @@
 						<thead>
 							<tr class="bg-surface-container text-secondary font-label-sm text-label-sm uppercase tracking-wider">
 								<th class="py-3 px-4 w-12 text-center" scope="col">
-									<input class="rounded accent-primary cursor-pointer w-4 h-4" id="selectAllCheckbox" type="checkbox" />
+									<input
+										class="rounded accent-primary cursor-pointer w-4 h-4"
+										id="selectAllCheckbox"
+										type="checkbox"
+										checked={allOnPage}
+										onchange={(e) => toggleAll((e.target as HTMLInputElement).checked)}
+									/>
 								</th>
 								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Invoice #</th>
 								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Vendor</th>
@@ -425,14 +577,20 @@
 							</tr>
 						</thead>
 						<tbody class="font-body-sm text-body-sm text-on-surface" id="invoiceTableBody">
-							{#each filtered as invoice}
+							{#each pageRows as invoice}
 								<tr
 									class="invoice-row hover:bg-surface-container transition-colors group cursor-pointer"
 									data-status={invoice.status === 'needs_review' ? 'review' : invoice.status}
 									onclick={() => goto(`/invoices/${invoice.id}`)}
 								>
 									<td class="py-3.5 px-4 text-center">
-										<input class="row-check rounded accent-primary cursor-pointer w-4 h-4" type="checkbox" />
+										<input
+											class="row-check rounded accent-primary cursor-pointer w-4 h-4"
+											type="checkbox"
+											value={invoice.id}
+											bind:group={selected}
+											onclick={(e) => e.stopPropagation()}
+										/>
 									</td>
 									<td class="py-3.5 px-4 font-numeric-table text-numeric-table font-semibold text-primary">
 										{invoice.invoice_number ?? '—'}
@@ -470,22 +628,46 @@
 										{uploadedAgo(invoice)}
 									</td>
 									<td class="py-3.5 px-4 text-right">
-										<button
-											class="inline-flex items-center gap-1 px-3 py-1 rounded bg-primary hover:bg-on-primary-fixed-variant text-on-primary font-label-md text-label-md transition-colors shadow-sm"
-											type="button"
-											onclick={(e) => {
-												e.stopPropagation()
-												goto(`/invoices/${invoice.id}`)
-											}}
-										>
-											<span>Review</span>
-											<span class="material-symbols-outlined text-[14px]">arrow_forward</span>
-										</button>
+										<div class="inline-flex items-center gap-1.5">
+											<button
+												class="inline-flex items-center gap-1 px-3 py-1 rounded bg-primary hover:bg-on-primary-fixed-variant text-on-primary font-label-md text-label-md transition-colors shadow-sm"
+												type="button"
+												onclick={(e) => {
+													e.stopPropagation()
+													goto(`/invoices/${invoice.id}`)
+												}}
+											>
+												<span>Review</span>
+												<span class="material-symbols-outlined text-[14px]">arrow_forward</span>
+											</button>
+											<form method="POST" action="?/delete" use:enhance class="inline-flex">
+												<input name="id" type="hidden" value={invoice.id} />
+												<button
+													class="p-1.5 rounded-lg text-secondary hover:text-error hover:bg-error-container transition-colors"
+													type="submit"
+													title="Delete invoice"
+													onclick={(e) => {
+														e.stopPropagation()
+														if (
+															!confirm(
+																`Delete ${invoice.invoice_number || 'this invoice'}? It will be marked deleted at ${new Date().toLocaleString()} and hidden from the queue.`
+															)
+														) {
+															e.preventDefault()
+														}
+													}}
+												>
+													<span class="material-symbols-outlined text-[18px]">delete</span>
+												</button>
+											</form>
+										</div>
 									</td>
 								</tr>
 							{:else}
 								<tr>
-									<td colspan="8" class="py-8 text-center text-[#5B6577]">No invoices yet. Upload a PDF to get started.</td>
+									<td colspan="8" class="py-8 text-center text-[#5B6577]">
+									{filtersActive ? 'No invoices match your search or filters.' : 'No invoices yet. Upload a PDF to get started.'}
+								</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -494,19 +676,51 @@
 				<!-- Table Footer / Pagination -->
 				<div class="p-space-md bg-surface-container-lowest flex flex-col sm:flex-row items-center justify-between gap-space-sm">
 					<span class="font-body-sm text-body-sm text-secondary">
-						Showing <strong class="text-on-surface">1 to {filtered.length}</strong> of <strong class="text-on-surface">{invoices.length}</strong> invoices
+						Showing <strong class="text-on-surface">{rangeStart}–{rangeEnd}</strong> of <strong class="text-on-surface">{filtered.length}</strong> invoices
 					</span>
-					<div class="flex items-center gap-1 font-label-md text-label-md">
-						<button class="px-2.5 py-1.5 rounded-lg bg-surface-container text-secondary hover:text-on-surface disabled:opacity-40 transition-colors" disabled type="button">
-							Previous
-						</button>
-						<button class="w-8 h-8 rounded-lg bg-primary text-on-primary font-bold">1</button>
-						<button class="w-8 h-8 rounded-lg text-secondary hover:bg-surface-container transition-colors" type="button">2</button>
-						<button class="w-8 h-8 rounded-lg text-secondary hover:bg-surface-container transition-colors" type="button">3</button>
-						<button class="w-8 h-8 rounded-lg text-secondary hover:bg-surface-container transition-colors" type="button">4</button>
-						<button class="px-2.5 py-1.5 rounded-lg bg-surface-container text-on-surface hover:bg-surface-container-high transition-colors" type="button">
-							Next
-						</button>
+					<div class="flex items-center gap-space-sm font-label-md text-label-md">
+						<div class="relative">
+							<select
+								class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-1.5 rounded-lg shadow-sm focus:outline-none cursor-pointer"
+								bind:value={pageSize}
+							>
+								{#each [6, 10, 20, 50, 100] as size}
+									<option value={size}>{size} / page</option>
+								{/each}
+							</select>
+							<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2 pointer-events-none">expand_more</span>
+						</div>
+						<div class="flex items-center gap-1">
+							<button
+								class="px-2.5 py-1.5 rounded-lg bg-surface-container text-secondary hover:text-on-surface disabled:opacity-40 transition-colors"
+								disabled={currentPage === 1}
+								onclick={() => (page = currentPage - 1)}
+								type="button"
+							>
+								Previous
+							</button>
+							{#each pageButtons as b}
+								{#if b === '…'}
+									<span class="px-1 text-secondary">…</span>
+								{:else}
+									<button
+										class={`w-8 h-8 rounded-lg transition-colors ${b === currentPage ? 'bg-primary text-on-primary font-bold' : 'text-secondary hover:bg-surface-container'}`}
+										onclick={() => (page = b as number)}
+										type="button"
+									>
+										{b}
+									</button>
+								{/if}
+							{/each}
+							<button
+								class="px-2.5 py-1.5 rounded-lg bg-surface-container text-on-surface hover:bg-surface-container-high disabled:opacity-40 transition-colors"
+								disabled={currentPage === totalPages}
+								onclick={() => (page = currentPage + 1)}
+								type="button"
+							>
+								Next
+							</button>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -519,16 +733,44 @@
 			<span class="material-symbols-outlined text-[20px] text-primary-fixed">keyboard</span>
 			<span class="font-label-sm text-label-sm text-inverse-on-surface hidden sm:inline">AP Hotkeys:</span>
 			<div class="flex items-center gap-1.5 font-label-sm text-label-sm">
-				<span class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface">[A] Approve</span>
-				<span class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface">[F] Flag</span>
-				<span class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface">[S] Skip</span>
+				<button
+					class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface hover:bg-surface-variant/40 disabled:opacity-40 transition-colors"
+					disabled={selected.length === 0 || batchBusy}
+					onclick={() => runBatch('approve')}
+					type="button"
+				>
+					[A] Approve
+				</button>
+				<button
+					class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface hover:bg-surface-variant/40 disabled:opacity-40 transition-colors"
+					disabled={selected.length === 0 || batchBusy}
+					onclick={() => runBatch('flag')}
+					type="button"
+				>
+					[F] Flag
+				</button>
+				<button
+					class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface hover:bg-surface-variant/40 disabled:opacity-40 transition-colors"
+					disabled={selected.length === 0}
+					onclick={skipSelected}
+					type="button"
+				>
+					[S] Skip
+				</button>
 			</div>
 		</div>
 		<div class="flex items-center gap-2 shrink-0">
-			<span class="font-body-sm text-body-sm text-secondary-fixed" id="selectedCountBadge">0 selected</span>
-			<button class="px-3 py-1 bg-primary text-on-primary rounded font-label-md text-label-md hover:bg-on-primary-fixed-variant transition-colors" type="button">
-				Batch Sign-off
+			<span class="font-body-sm text-body-sm text-secondary-fixed" id="selectedCountBadge">{selected.length} selected</span>
+			<button
+				class="px-3 py-1 bg-primary text-on-primary rounded font-label-md text-label-md hover:bg-on-primary-fixed-variant disabled:opacity-40 transition-colors"
+				disabled={selected.length === 0 || batchBusy}
+				onclick={() => runBatch('approve')}
+				type="button"
+			>
+				{batchBusy ? 'Working…' : 'Batch Sign-off'}
 			</button>
 		</div>
 	</div>
 </div>
+
+<svelte:window onkeydown={onKeydown} />
