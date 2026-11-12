@@ -1,0 +1,32 @@
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# PocketBase binary (self-hosted; gitignored except its README)
+pocketbase/*
+!pocketbase/README.md
+
+# Generated sample invoices
+data/sample/*.pdf
+data/sample/expected/*.json
+scripts/generated-pdfs/
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

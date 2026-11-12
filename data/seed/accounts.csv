@@ -1,0 +1,17 @@
+code,name,type
+1500,Prepaid Expenses,asset
+1600,Fixed Assets - Equipment,asset
+2000,Accounts Payable,liability
+5000,Office Supplies,expense
+5100,Cleaning & Janitorial,expense
+5200,IT Services & Software,expense
+5300,Legal & Professional Fees,expense
+5400,Landscaping & Grounds,expense
+5500,Freight & Shipping,expense
+5600,Repairs & Maintenance,expense
+5700,Utilities,expense
+5800,Insurance,expense
+5900,Travel & Meals,expense
+6000,Marketing & Advertising,expense
+6100,Telephone & Internet,expense
+6200,Equipment Rental & Small Equipment,expense
