@@ -9,6 +9,9 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
+# Copy static assets to build output
+RUN cp -r static/* build/client/
+
 # Runtime stage
 FROM node:22-alpine AS runner
 
