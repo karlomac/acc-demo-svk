@@ -1,0 +1,34 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ledgerlens-app
+    environment:
+      - NODE_ENV=production
+      - PORT=5173
+      - POCKETBASE_URL=${POCKETBASE_URL}
+      - LLM_PROVIDER=${LLM_PROVIDER}
+      - LLM_MODEL=${LLM_MODEL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_COMPAT_BASE_URL=${OPENAI_COMPAT_BASE_URL}
+      - OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY}
+      - GL_CONFIDENCE_THRESHOLD=${GL_CONFIDENCE_THRESHOLD}
+      - PO_TOLERANCE_PCT=${PO_TOLERANCE_PCT}
+      # Trust proxy headers from Traefik for correct origin/host
+      - PROTOCOL_HEADER=x-forwarded-proto
+      - HOST_HEADER=x-forwarded-host
+      # Set ORIGIN to your public URL (optional if trusting proxy headers)
+      - ORIGIN=${ORIGIN}
+    expose:
+      - "5173"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5173/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# Note: PocketBase runs separately on pbx-acc.crimsontechnik.com
+# This compose file only deploys the SvelteKit frontend
