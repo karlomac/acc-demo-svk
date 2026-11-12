@@ -1,14 +1,11 @@
 import type { Actions, PageServerLoad } from './$types'
 import { fail, redirect } from '@sveltejs/kit'
-import { getConfig } from '../../lib/server/core/config'
-
-const config = getConfig()
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (locals.user) {
 		throw redirect(303, '/')
 	}
-	return { showDemoHint: config.LLM_PROVIDER === 'mock' }
+	return { showDemoHint: (process.env.LLM_PROVIDER ?? 'mock') === 'mock' }
 }
 
 export const actions: Actions = {

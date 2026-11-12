@@ -8,6 +8,10 @@ services:
       - NODE_ENV=production
       - PORT=5173
       - POCKETBASE_URL=${POCKETBASE_URL}
+      - PB_SUPERUSER_EMAIL=${PB_SUPERUSER_EMAIL}
+      - PB_SUPERUSER_PASSWORD=${PB_SUPERUSER_PASSWORD}
+      - DEMO_USER_EMAIL=${DEMO_USER_EMAIL}
+      - DEMO_USER_PASSWORD=${DEMO_USER_PASSWORD}
       - LLM_PROVIDER=${LLM_PROVIDER}
       - LLM_MODEL=${LLM_MODEL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -15,20 +19,24 @@ services:
       - OPENAI_COMPAT_API_KEY=${OPENAI_COMPAT_API_KEY}
       - GL_CONFIDENCE_THRESHOLD=${GL_CONFIDENCE_THRESHOLD}
       - PO_TOLERANCE_PCT=${PO_TOLERANCE_PCT}
-      # Trust proxy headers from Traefik for correct origin/host
+      # Traefik sends these; lets SvelteKit derive the correct origin per request
       - PROTOCOL_HEADER=x-forwarded-proto
       - HOST_HEADER=x-forwarded-host
-      # Set ORIGIN to your public URL (optional if trusting proxy headers)
-      - ORIGIN=${ORIGIN}
     expose:
       - "5173"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5173/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5173/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+    networks:
+      - dokploy-network
 
-# Note: PocketBase runs separately on pbx-acc.crimsontechnik.com
+networks:
+  dokploy-network:
+    external: true
+
+# PocketBase runs separately on pbx-acc.crimsontechnik.com
 # This compose file only deploys the SvelteKit frontend

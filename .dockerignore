@@ -1,0 +1,14 @@
+node_modules
+.build
+.svelte-kit
+build
+test-results
+playwright-report
+data
+scripts/generated-pdfs
+*.png
+.env
+.env.*
+!.env.example
+.git
+.vscode
