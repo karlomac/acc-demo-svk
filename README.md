@@ -1,54 +1,126 @@
-# sv
+# LedgerLens — AI-Assisted Invoice Review
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+A SvelteKit + PocketBase application for reviewing vendor invoices. Upload PDFs, extract line items via LLM (mock), validate against purchase orders and GL accounts, flag discrepancies, and approve/reject with a full audit trail.
 
-## Creating a project
+## Stack
 
-If you're seeing this, you've probably already done this step. Congrats!
+| Layer | Technology |
+|-------|------------|
+| Frontend | SvelteKit 3.2.0, Svelte 5.57.3 (runes), Tailwind CSS 4.3.5 |
+| Backend | PocketBase 0.40.6 (Go, embedded SQLite) |
+| Auth | PocketBase auth collections, httpOnly cookies |
+| Testing | Vitest 4.1.12, Playwright |
+| Language | TypeScript (strict) |
 
-```sh
-# create a new project
-npx sv create my-app
-```
+## Features
 
-To recreate this project with the same configuration:
+- **Upload queue** — drag-and-drop up to 20 PDFs (10 MB each), magic-byte validation
+- **Extraction pipeline** — PDF → LLM mock → structured line items + GL code suggestions
+- **Validation engine** — 7 built-in rules (totals, PO presence, GL validity, duplicates, etc.)
+- **Review UI** — per-invoice detail page with line items, confidence scores, GL picker, approve/reject
+- **Audit log** — tamper-evident chain (hash-linked entries) with verification endpoint
+- **Export** — CSV download of reviewed invoices
 
-```sh
-# recreate this project
-npx sv@1.3.0 create --template minimal --types ts --add prettier eslint vitest="usages:unit" tailwindcss="plugins:none" sveltekit-adapter="adapter:node" --no-download-check --install npm .
-```
+## Quick Start
 
-## Adding features
+```bash
+# Install deps
+npm install
 
-Add features to your project with `sv add`:
+# Start PocketBase (terminal 1)
+./pocketbase/pocketbase serve --http=127.0.0.1:8090 --dir=./pocketbase/pb_data
 
-```sh
-npx sv add
-```
-
-For example, to add Tailwind CSS:
-
-```sh
-npx sv add tailwindcss
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+# Start dev server (terminal 2)
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+# → http://localhost:5173
 ```
 
-## Building
+## Demo Credentials
 
-To create a production version of your app:
+| Role | Email | Password |
+|------|-------|----------|
+| Reviewer | `reviewer@ledgerlens.test` | `Demo-Reviewer-123!` |
 
-```sh
-npm run build
+Admin superuser: `admin@ledgerlens.test` / `Admin-Demo-12345!` (PocketBase Admin UI at `http://127.0.0.1:8090/_/`)
+
+## Scripts
+
+```bash
+npm run dev        # Start Vite dev server
+npm run build      # Production build (adapter-node)
+npm run check      # svelte-check (types)
+npm run test       # Vitest unit tests
+npm run test:ui    # Vitest UI
+npx playwright test # E2E tests
 ```
 
-You can preview the production build with `npm run preview`.
+## Project Structure
+
+```
+src/
+├── routes/
+│   ├── +page.svelte          # Upload queue (main page)
+│   ├── +page.server.ts       # Load + upload action
+│   ├── login/                # Auth pages
+│   ├── api/invoices/[id]/process/  # Extraction pipeline endpoint
+│   └── invoices/[id]/        # Detail page (review, approve/reject)
+├── lib/
+│   ├── server/
+│   │   ├── core/
+│   │   │   ├── money.ts      # Decimal-safe money math
+│   │   │   ├── validation.ts # 7 validation rules
+│   │   │   ├── audit.ts      # Hash-linked audit log
+│   │   │   └── pipeline.ts   # PDF → lines → GL → validate
+│   │   └── pb/               # PocketBase admin/client helpers
+│   └── components/           # UI components (StatusChip, Icon, etc.)
+scripts/
+├── generate-sample-invoices.ts  # Creates 10 test PDFs with intentional errors
+tests/                          # Vitest + Playwright
+pocketbase/                     # PocketBase binary + pb_data (gitignored)
+```
+
+## Sample Data
+
+```bash
+npx tsx scripts/generate-sample-invoices.ts
+# Creates 10 PDFs in scripts/generated-pdfs/ with known validation issues
+```
+
+## Validation Rules
+
+| ID | Rule | Severity |
+|----|------|----------|
+| V001 | Line items sum matches subtotal | blocking |
+| V002 | Subtotal + tax = total | blocking |
+| V003 | PO exists in system | blocking |
+| V004 | PO total covers invoice | warning |
+| V005 | PO number present on invoice | blocking |
+| V006 | All GL codes valid | warning |
+| V007 | No duplicate invoice number per vendor | blocking |
+
+## Audit Log
+
+Each sensitive action (upload, process, approve, reject, line update) writes an entry:
+
+```json
+{
+  "invoice": "record_id",
+  "action": "approve",
+  "actor": "user_id",
+  "timestamp": "ISO8601",
+  "prev_hash": "sha256_of_previous_entry",
+  "hash": "sha256(this_entry)"
+}
+```
+
+Verify chain integrity: `GET /api/audit/verify?invoice=<id>`
+
+## Deploy (Dokploy)
+
+- Use `expose: ["5173"]` in compose (no host `ports:`)
+- Set `ORIGIN=https://your-domain.com` + trust proxy headers (`x-forwarded-proto`, `x-forwarded-host`)
+- PocketBase data dir must be a persistent volume
+
+## License
+
+MIT
