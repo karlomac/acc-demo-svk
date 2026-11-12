@@ -4,7 +4,7 @@ import PocketBase from 'pocketbase'
 
 type Resolve = (event: RequestEvent) => Promise<Response>
 
-const PUBLIC_PATHS = new Set(['/login', '/health'])
+const PUBLIC_PATHS = new Set(['/', '/login', '/health'])
 
 export const handle = async ({ event, resolve }: { event: RequestEvent; resolve: Resolve }): Promise<Response> => {
 	const pbUrl = process.env.POCKETBASE_URL ?? 'http://127.0.0.1:8090'

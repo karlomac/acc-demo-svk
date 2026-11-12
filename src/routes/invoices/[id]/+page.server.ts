@@ -9,7 +9,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const pb = locals.pb
 
 	const invoice = await pb.collection('invoices').getOne(params.id)
-	if (invoice.deleted_at) throw redirect(303, '/')
+	if (invoice.deleted_at) throw redirect(303, '/queue')
 	const lines = await pb.collection('invoice_lines').getFullList({
 		filter: pb.filter('invoice = {:id}', { id: params.id }),
 		sort: 'line_no',

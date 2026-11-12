@@ -1,776 +1,943 @@
 <script lang="ts">
-	import { enhance, deserialize } from '$app/forms'
-	import { invalidateAll } from '$app/navigation'
-	import { goto } from '$app/navigation'
+	let { data } = $props()
+	const demoEmail = $derived(data?.demoEmail ?? '')
+	let copied = $state(false)
 
-	let { data, form } = $props()
-	const invoices: any[] = $derived((data?.invoices ?? []).slice())
-
-	let filter = $state('all')
-	let search = $state('')
-	let vendorFilter = $state('all')
-	let amountFilter = $state('any')
-	let statusFilter = $state('all')
-	let page = $state(1)
-	let pageSize = $state(6)
-	let selected = $state<string[]>([])
-	let batchBusy = $state(false)
-	let pendingProcess = $state<string[]>([])
-	const processedSet = new Set<string>()
-	let statusText = $state('')
-	let showEmpty = $state(false)
-	let fileInput: HTMLInputElement
-
-	const stats = $derived({
-		total: invoices.length,
-		needs_review: invoices.filter((i) => i.status === 'needs_review').length,
-		flagged: invoices.filter((i) => i.status === 'flagged').length,
-		approved: invoices.filter((i) => i.status === 'approved').length,
-	})
-
-	const vendors = $derived(
-		[...new Set(invoices.map((i) => i.vendor_name).filter(Boolean))].sort() as string[]
-	)
-
-	const filtered = $derived(
-		invoices.filter((i) => {
-			if (filter === 'review' && i.status !== 'needs_review') return false
-			if (filter === 'flagged' && i.status !== 'flagged') return false
-			if (filter === 'approved' && i.status !== 'approved') return false
-			if (statusFilter !== 'all' && i.status !== statusFilter) return false
-			if (vendorFilter !== 'all' && i.vendor_name !== vendorFilter) return false
-			const total = Number(i.total ?? 0)
-			if (amountFilter === 'lt5000' && total >= 5000) return false
-			if (amountFilter === '5to20' && (total < 5000 || total > 20000)) return false
-			if (amountFilter === 'gt20000' && total <= 20000) return false
-			const q = search.trim().toLowerCase()
-			if (q) {
-				const hay = `${i.invoice_number ?? ''} ${i.vendor_name ?? ''} ${i.po_number ?? ''}`.toLowerCase()
-				if (!hay.includes(q)) return false
-			}
-			return true
-		})
-	)
-
-	const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)))
-	const currentPage = $derived(Math.min(page, totalPages))
-	const pageRows = $derived(filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize))
-	const rangeStart = $derived(filtered.length === 0 ? 0 : (currentPage - 1) * pageSize + 1)
-	const rangeEnd = $derived(Math.min(currentPage * pageSize, filtered.length))
-	const pageButtons = $derived.by(() => {
-		const total = totalPages
-		if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1) as (number | string)[]
-		const out: (number | string)[] = [1]
-		const start = Math.max(2, currentPage - 1)
-		const end = Math.min(total - 1, currentPage + 1)
-		if (start > 2) out.push('…')
-		for (let i = start; i <= end; i++) out.push(i)
-		if (end < total - 1) out.push('…')
-		out.push(total)
-		return out
-	})
-
-	const allOnPage = $derived(
-		pageRows.length > 0 && pageRows.every((i: any) => selected.includes(i.id))
-	)
-
-	function toggleAll(checked: boolean) {
-		selected = checked ? pageRows.map((i: any) => i.id) : []
-	}
-
-	async function runBatch(action: 'approve' | 'flag') {
-		if (selected.length === 0 || batchBusy) return
-		batchBusy = true
-		const fd = new FormData()
-		fd.append('action', action)
-		for (const id of selected) fd.append('ids', id)
+	async function copyEmail() {
+		if (!demoEmail) return
 		try {
-			const res = await fetch('?/batch', { method: 'POST', body: fd })
-			const result = deserialize(await res.text())
-			if (result.type === 'failure') {
-				alert((result.data as { error?: string })?.error ?? 'Batch action failed')
-			} else if (result.type === 'success') {
-				const skipped = (result.data as { skipped?: unknown[] })?.skipped ?? []
-				if (skipped.length > 0) {
-					alert(`${skipped.length} invoice(s) skipped — not in a reviewable state.`)
-				}
-			}
-		} finally {
-			selected = []
-			batchBusy = false
-			await invalidateAll()
+			await navigator.clipboard.writeText(demoEmail)
+			copied = true
+			setTimeout(() => (copied = false), 1800)
+		} catch {
+			copied = false
 		}
 	}
-
-	function skipSelected() {
-		selected = []
-	}
-
-	function onKeydown(e: KeyboardEvent) {
-		const t = e.target as HTMLInputElement | null
-		const typing =
-			t &&
-			(t.tagName === 'TEXTAREA' ||
-				t.tagName === 'SELECT' ||
-				t.isContentEditable ||
-				(t.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(t.type)))
-		if (typing) return
-		if (e.metaKey || e.ctrlKey || e.altKey) return
-		if (selected.length === 0) return
-		const key = e.key.toLowerCase()
-		if (key === 'a') {
-			e.preventDefault()
-			runBatch('approve')
-		} else if (key === 'f') {
-			e.preventDefault()
-			runBatch('flag')
-		} else if (key === 's') {
-			e.preventDefault()
-			skipSelected()
-		}
-	}
-
-	const filtersActive = $derived(
-		filter !== 'all' || statusFilter !== 'all' || vendorFilter !== 'all' || amountFilter !== 'any' || search.trim() !== ''
-	)
-
-	function failedChecks(validationJson: any, blocking: boolean) {
-		if (!Array.isArray(validationJson)) return 0
-		return validationJson.filter((c: any) => c.status === 'fail' && (blocking ? c.severity === 'blocking' : true)).length
-	}
-	function blockingCount(validationJson: any) {
-		return failedChecks(validationJson, true)
-	}
-	function warningCount(validationJson: any) {
-		return failedChecks(validationJson, false) - failedChecks(validationJson, true)
-	}
-	function money(n: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n ?? 0)
-	}
-	function uploadedAgo(i: any) {
-		const d = new Date(i.created ?? '')
-		const now = new Date()
-		const mins = Math.floor((now.getTime() - d.getTime()) / 60000)
-		if (mins < 60) return `${mins} mins ago`
-		const hours = Math.floor(mins / 60)
-		if (hours < 24) return `${hours} hours ago`
-		const days = Math.floor(hours / 24)
-		if (days === 1) return 'Yesterday'
-		return `${days} days ago`
-	}
-	function vendorInitial(name: string | null | undefined) {
-		return (name ?? '?').charAt(0).toUpperCase()
-	}
-	function statusChipCls(status: string | null | undefined) {
-		const s = status ?? 'uploaded'
-		const base = 'inline-flex items-center px-2 py-0.5 rounded-full font-label-sm text-label-sm'
-		if (s === 'needs_review') return `${base} bg-primary-fixed text-primary`
-		if (s === 'flagged') return `${base} bg-error-container text-on-error-container`
-		if (s === 'approved') return `${base} bg-secondary-container text-on-secondary-container`
-		return `${base} bg-surface-container-high text-primary`
-	}
-	function statusLabel(status: string | null | undefined) {
-		return (status ?? 'uploaded').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-	}
-
-	async function runProcess(ids: string[]) {
-		pendingProcess = ids
-		for (let i = 0; i < ids.length; i++) {
-			statusText = `Processing ${i + 1}/${ids.length} uploaded invoice file(s)...`
-			try {
-				await fetch(`/api/invoices/${ids[i]}/process`, { method: 'POST' })
-			} catch {
-				/* surface via next queue load */
-			}
-			await invalidateAll()
-		}
-		statusText = ''
-		pendingProcess = []
-	}
-
-	function handleRefresh(e: MouseEvent) {
-		e.stopPropagation()
-		invalidateAll()
-	}
-
-	function handleCancel(e: MouseEvent) {
-		e.stopPropagation()
-		pendingProcess = []
-		statusText = ''
-	}
-
-	function handleFileClick(e: MouseEvent) {
-		e.stopPropagation()
-		fileInput.click()
-	}
-
-	function handleTab(active: string) {
-		filter = active
-	}
-
-	function tabCls(active: string) {
-		const base = 'filter-tab px-3.5 py-1.5 rounded-lg font-label-md text-label-md transition-all shadow-sm'
-		if (filter === active) return `${base} bg-surface-container-lowest text-on-surface`
-		return `${base} text-secondary hover:text-on-surface`
-	}
-
-	$effect(() => {
-		filter
-		search
-		vendorFilter
-		amountFilter
-		statusFilter
-		pageSize
-		page = 1
-	})
-
-	$effect(() => {
-		const ids = Array.isArray(form?.ids) ? (form.ids as string[]) : []
-		if (ids.length && !ids.some((id) => processedSet.has(id))) {
-			const next = ids.filter((id) => !processedSet.has(id))
-			runProcess(next)
-			next.forEach((id) => processedSet.add(id))
-		}
-	})
 </script>
 
 <svelte:head>
-	<title>Invoice queue — LedgerLens</title>
+	<title>LedgerLens — AI-Assisted Accounts Payable Invoice Review</title>
+	<meta
+		name="description"
+		content="LedgerLens extracts, validates and GL-codes high-volume vendor invoices before payment runs. Try the live demo with 10 intentionally flawed sample invoices."
+	/>
+	<meta name="color-scheme" content="light" />
 </svelte:head>
 
-<div class="w-full max-w-[1600px] mx-auto px-margin py-gutter-lg flex flex-col gap-space-xl">
-	<!-- Top Context & Header Row -->
-	<div class="flex flex-col md:flex-row md:items-center justify-between gap-space-md">
-		<div class="flex flex-col gap-space-xs">
-			<div class="flex items-center gap-2">
-				<span class="font-headline-lg text-headline-lg text-on-surface">Invoice queue</span>
-				<span class="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm">
-					Batch AP v2.4
-				</span>
-			</div>
-			<p class="font-body-md text-body-md text-secondary">
-				Upload PDF invoices. They are extracted, validated and GL-coded automatically.
-			</p>
-		</div>
-		<div class="flex items-center gap-space-sm flex-wrap">
-			<button
-				class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-container-lowest text-on-surface hover:bg-surface-container transition-all shadow-sm font-label-md text-label-md"
-				type="button"
-				onclick={handleRefresh}
-			>
-				<span class="material-symbols-outlined text-[18px] text-primary transition-transform duration-500">sync</span>
-				<span>Refresh Queue</span>
-			</button>
-			<div class="relative inline-block text-left">
-				<button
-					class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-container-lowest text-on-surface hover:bg-surface-container transition-all shadow-sm font-label-md text-label-md"
-					type="button"
-				>
-					<span class="material-symbols-outlined text-[18px] text-secondary">tune</span>
-					<span>Batch Actions</span>
-					<span class="material-symbols-outlined text-[16px] text-secondary">expand_more</span>
-				</button>
-				<div class="hidden absolute right-0 mt-2 w-48 rounded-xl bg-surface-container-lowest shadow-xl p-1 z-30 font-body-sm text-body-sm">
-					<button class="w-full text-left px-3 py-2 rounded-lg hover:bg-surface-container flex items-center gap-2 text-on-surface" type="button">
-						<span class="material-symbols-outlined text-[16px] text-primary">check_circle</span>
-						<span>Approve selected (0)</span>
-					</button>
-					<button class="w-full text-left px-3 py-2 rounded-lg hover:bg-surface-container flex items-center gap-2 text-on-surface" type="button">
-						<span class="material-symbols-outlined text-[16px] text-error">flag</span>
-						<span>Flag selected</span>
-					</button>
-					<button class="w-full text-left px-3 py-2 rounded-lg hover:bg-surface-container flex items-center gap-2 text-on-surface" type="button">
-						<span class="material-symbols-outlined text-[16px] text-secondary">file_download</span>
-						<span>Export selected CSV</span>
-					</button>
-				</div>
-			</div>
-		</div>
-	</div>
+<div class="min-h-screen flex flex-col bg-[#FAFBFC] text-[#0F172A]">
+<!-- 1) Sticky Top Nav -->
+  <header class="sticky top-0 z-50 bg-white/95 backdrop-blur-sm border-b border-[#E3E6EB] transition-colors">
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <!-- Left Brand -->
+      <a href="/" class="flex items-center gap-2.5 text-[#0F172A] font-semibold text-lg tracking-tight hover:opacity-90">
+        <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] flex items-center justify-center text-[#2554D6]">
+          <span class="material-symbols-outlined text-[20px]">menu_book</span>
+        </div>
+        <span>LedgerLens</span>
+      </a>
 
-	<!-- Active Extraction Notification / Processing Strip -->
-	{#if pendingProcess.length}
-		<div class="relative overflow-hidden rounded-xl bg-primary-fixed text-on-primary-fixed p-space-md shadow-sm transition-all">
-			<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm relative z-10">
-				<div class="flex items-center gap-space-md min-w-0">
-					<div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-on-primary shrink-0 animate-spin">
-						<span class="material-symbols-outlined text-[18px]">progress_activity</span>
-					</div>
-					<div class="flex flex-col min-w-0">
-						<span class="font-headline-sm text-headline-sm leading-tight text-on-primary-fixed truncate">{statusText}</span>
-						<span class="font-body-sm text-body-sm text-on-primary-fixed-variant truncate">
-							Extracting line items, validating PO match, and predicting GL distribution codes.
-						</span>
-					</div>
-				</div>
-				<div class="flex items-center gap-space-md shrink-0">
-					<div class="w-36 bg-surface-container-lowest/80 h-2 rounded-full overflow-hidden">
-						<div class="bg-primary h-full rounded-full transition-all duration-300 w-2/5 animate-pulse"></div>
-					</div>
-					<button
-						class="text-on-primary-fixed-variant hover:text-on-primary-fixed font-label-md text-label-md px-2 py-1 rounded bg-surface-container-lowest/40 hover:bg-surface-container-lowest/80 transition-colors"
-						type="button"
-						onclick={handleCancel}
-					>
-						Cancel
-					</button>
-				</div>
-			</div>
-		</div>
-	{/if}
+      <!-- Center Links -->
+      <nav aria-label="Main Navigation" class="hidden md:flex items-center gap-8 text-sm font-medium text-[#5B6577]">
+        <a href="#problem" class="hover:text-[#0F172A] transition-colors">Problem</a>
+        <a href="#how-it-works" class="hover:text-[#0F172A] transition-colors">How it works</a>
+        <a href="#validation" class="hover:text-[#0F172A] transition-colors">Validation</a>
+        <a href="#roadmap" class="hover:text-[#0F172A] transition-colors">Roadmap</a>
+      </nav>
 
-	<!-- Metric Stat Cards -->
-	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter">
-		<div class="rounded-xl bg-surface-container-lowest p-space-lg shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-			<div class="flex items-start justify-between">
-				<span class="font-label-sm text-label-sm uppercase tracking-wider text-secondary">Total Invoices</span>
-				<div class="w-8 h-8 rounded-lg bg-surface-container flex items-center justify-center text-primary">
-					<span class="material-symbols-outlined text-[20px]">folder_copy</span>
-				</div>
-			</div>
-			<div class="mt-space-md flex flex-col">
-				<span class="font-display-lg text-display-lg text-on-surface">{stats.total}</span>
-				<div class="flex items-center gap-1.5 mt-1 text-secondary font-body-sm text-body-sm">
-					<span class="material-symbols-outlined text-[16px]">inventory_2</span>
-					<span>All active files in batch</span>
-				</div>
-			</div>
-		</div>
-		<div class="rounded-xl bg-surface-container-lowest p-space-lg shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-			<div class="flex items-start justify-between">
-				<span class="font-label-sm text-label-sm uppercase tracking-wider text-secondary">Needs Review</span>
-				<span class="px-2 py-0.5 rounded-full bg-primary-fixed text-primary font-label-sm text-label-sm">{stats.needs_review} pending</span>
-			</div>
-			<div class="mt-space-md flex flex-col">
-				<span class="font-display-lg text-display-lg text-primary">{stats.needs_review}</span>
-				<div class="flex items-center gap-1.5 mt-1 text-secondary font-body-sm text-body-sm">
-					<span class="material-symbols-outlined text-[16px] text-primary">rate_review</span>
-					<span>Awaiting reviewer sign-off</span>
-				</div>
-			</div>
-		</div>
-		<div class="rounded-xl bg-surface-container-lowest p-space-lg shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-			<div class="flex items-start justify-between">
-				<span class="font-label-sm text-label-sm uppercase tracking-wider text-secondary">Flagged</span>
-				<span class="px-2 py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm text-label-sm">{stats.flagged} high priority</span>
-			</div>
-			<div class="mt-space-md flex flex-col">
-				<span class="font-display-lg text-display-lg text-error">{stats.flagged}</span>
-				<div class="flex items-center gap-1.5 mt-1 text-secondary font-body-sm text-body-sm">
-					<span class="material-symbols-outlined text-[16px] text-error">error</span>
-					<span>Requires manual exception handling</span>
-				</div>
-			</div>
-		</div>
-		<div class="rounded-xl bg-surface-container-lowest p-space-lg shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-			<div class="flex items-start justify-between">
-				<span class="font-label-sm text-label-sm uppercase tracking-wider text-secondary">Approved</span>
-				<span class="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm">{stats.approved} cleared</span>
-			</div>
-			<div class="mt-space-md flex flex-col">
-				<span class="font-display-lg text-display-lg text-on-surface">{stats.approved}</span>
-				<div class="flex items-center gap-1.5 mt-1 text-secondary font-body-sm text-body-sm">
-					<span class="material-symbols-outlined text-[16px] text-primary">verified</span>
-					<span>Ready for ERP sync / payment batch</span>
-				</div>
-			</div>
-		</div>
-	</div>
+      <!-- Right CTAs -->
+      <div class="flex items-center gap-3">
+        <a href="/downloads/ledgerlens-sample-invoices.zip" download class="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-2 text-xs md:text-sm font-medium text-[#0F172A] hover:bg-[#F1F5F9] rounded-lg border border-[#E3E6EB] transition-colors">
+          <span class="material-symbols-outlined text-[18px] text-[#5B6577]">download</span>
+          <span>Download sample invoices</span>
+        </a>
+        <a href="/login" class="inline-flex items-center gap-1.5 px-4 py-2 text-xs md:text-sm font-medium text-white bg-[#2554D6] hover:bg-[#1B43B3] rounded-lg shadow-sm transition-colors">
+          <span>Open the demo</span>
+          <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+        </a>
+      </div>
+    </div>
+  </header>
 
-	<!-- Dropzone Area -->
-	<form method="POST" action="?/upload" enctype="multipart/form-data" use:enhance>
-		<div class="flex flex-col gap-space-sm">
-			<div
-				class={`relative rounded-xl bg-surface-container-low p-space-2xl text-center shadow-sm transition-all cursor-pointer ${showEmpty ? 'bg-surface-container-high' : 'hover:bg-surface-container-high'}`}
-				id="dropzone"
-				onclick={handleFileClick}
-			>
-				<input accept=".pdf" class="hidden" id="invoiceFileInput" name="files" multiple type="file" bind:this={fileInput} onchange={(e) => (e.target as HTMLInputElement).form?.requestSubmit()} />
-				<div class="max-w-xl mx-auto flex flex-col items-center">
-					<div class="w-14 h-14 rounded-2xl bg-surface-container-lowest flex items-center justify-center text-primary shadow-sm mb-space-md group-hover:scale-105 transition-transform">
-						<span class="material-symbols-outlined text-[32px]">cloud_upload</span>
-					</div>
-					<h2 class="font-headline-sm text-headline-sm text-on-surface">Drag PDF invoices here or click to browse</h2>
-					<p class="font-body-sm text-body-sm text-secondary mt-1">
-						Multiple PDFs, max 10 MB each • OCR Extraction + GL Auto-Match
-					</p>
-					<div class="mt-space-lg flex items-center gap-space-md flex-wrap justify-center">
-						<button
-							class="px-4 py-2 rounded-lg bg-primary hover:bg-on-primary-fixed-variant text-on-primary font-label-md text-label-md inline-flex items-center gap-2 shadow-sm transition-colors"
-							type="button"
-							onclick={(e) => {
-								e.stopPropagation()
-								fileInput.click()
-							}}
-						>
-							<span class="material-symbols-outlined text-[18px]">add_circle</span>
-							<span>Select PDFs</span>
-						</button>
-						<span class="font-body-sm text-body-sm text-secondary">
-							or press <kbd class="px-1.5 py-0.5 bg-surface-container-lowest text-on-surface rounded text-label-sm font-label-sm shadow-sm">Ctrl + U</kbd>
-						</span>
-					</div>
-				</div>
-			</div>
+  <main class="flex-1">
 
-			{#if form?.errors?.length}
-				<div class="rounded-lg bg-error-container text-on-error-container p-3 flex items-center justify-between shadow-sm" id="validationWarning">
-					<div class="flex items-center gap-2 min-w-0 pr-2">
-						<span class="material-symbols-outlined text-[20px] text-error shrink-0">warning</span>
-						<span class="font-body-sm text-body-sm truncate">
-							{#each form.errors as err}
-								{err.name} — {err.error}
-							{/each}
-						</span>
-					</div>
-					<button
-						class="shrink-0 text-on-error-container hover:opacity-70 p-1 rounded"
-						type="button"
-						onclick={(e) => {
-							e.stopPropagation()
-							fileInput.value = ''
-						}}
-					>
-						<span class="material-symbols-outlined text-[18px]">close</span>
-					</button>
-				</div>
-			{/if}
-		</div>
-	</form>
+    <!-- 2) Hero Section -->
+    <section class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 pt-12 pb-16 lg:pt-20 lg:pb-24">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
+        
+        <!-- Hero Left -->
+        <div class="lg:col-span-7 flex flex-col items-start">
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#1D4ED8] text-xs font-semibold uppercase tracking-wider mb-5">
+            <span class="material-symbols-outlined text-[16px]">verified</span>
+            <span>Accounts Payable Automation</span>
+          </div>
 
-	<!-- Filter, Search and Filter Controls -->
-	<div class="flex flex-col gap-space-md">
-		<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md">
-			<!-- Status Tabs -->
-			<div class="inline-flex p-1 rounded-xl bg-surface-container self-start shadow-sm" id="tabGroup">
-				<button class={tabCls('all')} data-filter="all" type="button" onclick={() => handleTab('all')}>
-					<span>All</span>
-					<span class="px-1.5 py-0.2 rounded-full bg-secondary-container text-on-secondary-container text-label-sm font-label-sm">{stats.total}</span>
-				</button>
-				<button class={tabCls('review')} data-filter="review" type="button" onclick={() => handleTab('review')}>
-					<span>Needs review</span>
-					<span class="px-1.5 py-0.2 rounded-full bg-primary-fixed text-primary text-label-sm font-label-sm">{stats.needs_review}</span>
-				</button>
-				<button class={tabCls('flagged')} data-filter="flagged" type="button" onclick={() => handleTab('flagged')}>
-					<span>Flagged</span>
-					<span class="px-1.5 py-0.2 rounded-full bg-error-container text-on-error-container text-label-sm font-label-sm">{stats.flagged}</span>
-				</button>
-				<button class={tabCls('approved')} data-filter="approved" type="button" onclick={() => handleTab('approved')}>
-					<span>Approved</span>
-					<span class="px-1.5 py-0.2 rounded-full bg-secondary-container text-on-secondary-container text-label-sm font-label-sm">{stats.approved}</span>
-				</button>
-			</div>
-			<!-- Filter Selectors & Search Input -->
-			<div class="flex items-center gap-space-sm flex-wrap">
-				<div class="relative flex-1 sm:w-64">
-					<span class="material-symbols-outlined text-[18px] text-secondary absolute left-3 top-2.5">search</span>
-					<input
-						class="w-full bg-surface-container-lowest pl-9 pr-3 py-2 rounded-lg text-on-surface font-body-sm text-body-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-						id="searchInput"
-						placeholder="Search invoice #, vendor, PO..."
-						type="text"
-						bind:value={search}
-					/>
-				</div>
-				<div class="relative">
-					<select
-						class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer"
-						bind:value={statusFilter}
-					>
-						<option value="all">Status: All</option>
-						<option value="uploaded">Uploaded</option>
-						<option value="processing">Processing</option>
-						<option value="needs_review">Needs review</option>
-						<option value="flagged">Flagged</option>
-						<option value="approved">Approved</option>
-						<option value="rejected">Rejected</option>
-						<option value="error">Error</option>
-					</select>
-					<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2.5 pointer-events-none">expand_more</span>
-				</div>
-				<div class="relative">
-					<select
-						class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer"
-						bind:value={vendorFilter}
-					>
-						<option value="all">All Vendors</option>
-						{#each vendors as vendor}
-							<option value={vendor}>{vendor}</option>
-						{/each}
-					</select>
-					<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2.5 pointer-events-none">expand_more</span>
-				</div>
-				<div class="relative">
-					<select
-						class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-2 rounded-lg shadow-sm focus:outline-none cursor-pointer"
-						bind:value={amountFilter}
-					>
-						<option value="any">Amount: Any</option>
-						<option value="lt5000">&lt; $5,000</option>
-						<option value="5to20">$5,000 - $20,000</option>
-						<option value="gt20000">&gt; $20,000</option>
-					</select>
-					<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2.5 pointer-events-none">expand_more</span>
-				</div>
-				<button
-					class="px-2.5 py-2 rounded-lg bg-surface-container text-secondary hover:text-on-surface font-label-sm text-label-sm flex items-center gap-1 transition-colors"
-					id="toggleEmptyStateBtn"
-					title="Toggle simulation view"
-					type="button"
-					onclick={() => (showEmpty = !showEmpty)}
-				>
-					<span class="material-symbols-outlined text-[16px]">visibility</span>
-					<span class="hidden sm:inline">Toggle Empty View</span>
-				</button>
-			</div>
-		</div>
+          <h1 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-[#0F172A] leading-[1.15] mb-6">
+            Stop paying invoices you cannot verify.
+          </h1>
 
-		{#if showEmpty}
-			<!-- Empty State View -->
-			<div class="rounded-xl bg-surface-container-lowest p-space-2xl text-center shadow-sm flex flex-col items-center justify-center" id="emptyStateContainer">
-				<div class="w-16 h-16 rounded-2xl bg-surface-container flex items-center justify-center text-secondary mb-space-md">
-					<span class="material-symbols-outlined text-[36px]">inventory_2</span>
-				</div>
-				<h3 class="font-headline-sm text-headline-sm text-on-surface">No invoices in this queue</h3>
-				<p class="font-body-sm text-body-sm text-secondary mt-1 max-w-sm">
-					{#if filtersActive}
-						No invoices match your search or filters. Clear the filters to see all processed documents.
-					{:else}
-						No invoices yet. Upload a PDF to get started.
-					{/if}
-				</p>
-				<button
-					class="mt-space-lg px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md inline-flex items-center gap-2 shadow-sm hover:bg-on-primary-fixed-variant transition-colors"
-					type="button"
-					onclick={(e) => {
-						e.stopPropagation()
-						fileInput.click()
-					}}
-				>
-					<span class="material-symbols-outlined text-[18px]">upload</span>
-					<span>Upload First Invoice</span>
-				</button>
-			</div>
-		{:else}
-			<!-- Data Table Surface -->
-			<div class="rounded-xl bg-surface-container-lowest shadow-sm overflow-hidden flex flex-col" id="tableContainer">
-				<div class="overflow-x-auto">
-					<table class="w-full text-left min-w-[900px]">
-						<thead>
-							<tr class="bg-surface-container text-secondary font-label-sm text-label-sm uppercase tracking-wider">
-								<th class="py-3 px-4 w-12 text-center" scope="col">
-									<input
-										class="rounded accent-primary cursor-pointer w-4 h-4"
-										id="selectAllCheckbox"
-										type="checkbox"
-										checked={allOnPage}
-										onchange={(e) => toggleAll((e.target as HTMLInputElement).checked)}
-									/>
-								</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Invoice #</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Vendor</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm text-right" scope="col">Total</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Status</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Issues / Flags</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm" scope="col">Uploaded</th>
-								<th class="py-3 px-4 font-label-sm text-label-sm text-right" scope="col">Actions</th>
-							</tr>
-						</thead>
-						<tbody class="font-body-sm text-body-sm text-on-surface" id="invoiceTableBody">
-							{#each pageRows as invoice}
-								<tr
-									class="invoice-row hover:bg-surface-container transition-colors group cursor-pointer"
-									data-status={invoice.status === 'needs_review' ? 'review' : invoice.status}
-									onclick={() => goto(`/invoices/${invoice.id}`)}
-								>
-									<td class="py-3.5 px-4 text-center">
-										<input
-											class="row-check rounded accent-primary cursor-pointer w-4 h-4"
-											type="checkbox"
-											value={invoice.id}
-											bind:group={selected}
-											onclick={(e) => e.stopPropagation()}
-										/>
-									</td>
-									<td class="py-3.5 px-4 font-numeric-table text-numeric-table font-semibold text-primary">
-										{invoice.invoice_number ?? '—'}
-									</td>
-									<td class="py-3.5 px-4">
-										<div class="flex items-center gap-2">
-											<div class="w-6 h-6 rounded bg-primary-fixed flex items-center justify-center font-label-sm text-label-sm text-primary font-bold">
-												{vendorInitial(invoice.vendor_name)}
-											</div>
-											<span class="font-medium text-on-surface">{invoice.vendor_name ?? '—'}</span>
-										</div>
-									</td>
-									<td class="py-3.5 px-4 text-right font-numeric-table text-numeric-table font-semibold text-on-surface">
-										{money(invoice.total)}
-									</td>
-									<td class="py-3.5 px-4">
-										<span class={statusChipCls(invoice.status)}>{statusLabel(invoice.status)}</span>
-									</td>
-									<td class="py-3.5 px-4">
-										{#if blockingCount(invoice.validation_json) > 0}
-											<div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-error-container text-on-error-container font-label-sm text-label-sm">
-												<span class="material-symbols-outlined text-[14px]">error</span>
-												<span>{blockingCount(invoice.validation_json)} blocking</span>
-											</div>
-										{:else if warningCount(invoice.validation_json) > 0}
-											<div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-tertiary-fixed text-tertiary font-label-sm text-label-sm">
-												<span class="material-symbols-outlined text-[14px]">warning</span>
-												<span>{warningCount(invoice.validation_json)} warning</span>
-											</div>
-										{:else}
-											<span class="text-secondary font-label-sm text-label-sm">—</span>
-										{/if}
-									</td>
-									<td class="py-3.5 px-4 text-secondary font-body-sm text-body-sm">
-										{uploadedAgo(invoice)}
-									</td>
-									<td class="py-3.5 px-4 text-right">
-										<div class="inline-flex items-center gap-1.5">
-											<button
-												class="inline-flex items-center gap-1 px-3 py-1 rounded bg-primary hover:bg-on-primary-fixed-variant text-on-primary font-label-md text-label-md transition-colors shadow-sm"
-												type="button"
-												onclick={(e) => {
-													e.stopPropagation()
-													goto(`/invoices/${invoice.id}`)
-												}}
-											>
-												<span>Review</span>
-												<span class="material-symbols-outlined text-[14px]">arrow_forward</span>
-											</button>
-											<form method="POST" action="?/delete" use:enhance class="inline-flex">
-												<input name="id" type="hidden" value={invoice.id} />
-												<button
-													class="p-1.5 rounded-lg text-secondary hover:text-error hover:bg-error-container transition-colors"
-													type="submit"
-													title="Delete invoice"
-													onclick={(e) => {
-														e.stopPropagation()
-														if (
-															!confirm(
-																`Delete ${invoice.invoice_number || 'this invoice'}? It will be marked deleted at ${new Date().toLocaleString()} and hidden from the queue.`
-															)
-														) {
-															e.preventDefault()
-														}
-													}}
-												>
-													<span class="material-symbols-outlined text-[18px]">delete</span>
-												</button>
-											</form>
-										</div>
-									</td>
-								</tr>
-							{:else}
-								<tr>
-									<td colspan="8" class="py-8 text-center text-[#5B6577]">
-									{filtersActive ? 'No invoices match your search or filters.' : 'No invoices yet. Upload a PDF to get started.'}
-								</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-				<!-- Table Footer / Pagination -->
-				<div class="p-space-md bg-surface-container-lowest flex flex-col sm:flex-row items-center justify-between gap-space-sm">
-					<span class="font-body-sm text-body-sm text-secondary">
-						Showing <strong class="text-on-surface">{rangeStart}–{rangeEnd}</strong> of <strong class="text-on-surface">{filtered.length}</strong> invoices
-					</span>
-					<div class="flex items-center gap-space-sm font-label-md text-label-md">
-						<div class="relative">
-							<select
-								class="appearance-none bg-surface-container-lowest text-on-surface font-label-md text-label-md pl-3 pr-8 py-1.5 rounded-lg shadow-sm focus:outline-none cursor-pointer"
-								bind:value={pageSize}
-							>
-								{#each [6, 10, 20, 50, 100] as size}
-									<option value={size}>{size} / page</option>
-								{/each}
-							</select>
-							<span class="material-symbols-outlined text-[16px] text-secondary absolute right-2.5 top-2 pointer-events-none">expand_more</span>
-						</div>
-						<div class="flex items-center gap-1">
-							<button
-								class="px-2.5 py-1.5 rounded-lg bg-surface-container text-secondary hover:text-on-surface disabled:opacity-40 transition-colors"
-								disabled={currentPage === 1}
-								onclick={() => (page = currentPage - 1)}
-								type="button"
-							>
-								Previous
-							</button>
-							{#each pageButtons as b}
-								{#if b === '…'}
-									<span class="px-1 text-secondary">…</span>
-								{:else}
-									<button
-										class={`w-8 h-8 rounded-lg transition-colors ${b === currentPage ? 'bg-primary text-on-primary font-bold' : 'text-secondary hover:bg-surface-container'}`}
-										onclick={() => (page = b as number)}
-										type="button"
-									>
-										{b}
-									</button>
-								{/if}
-							{/each}
-							<button
-								class="px-2.5 py-1.5 rounded-lg bg-surface-container text-on-surface hover:bg-surface-container-high disabled:opacity-40 transition-colors"
-								disabled={currentPage === totalPages}
-								onclick={() => (page = currentPage + 1)}
-								type="button"
-							>
-								Next
-							</button>
-						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
-	</div>
+          <p class="text-base sm:text-lg text-[#5B6577] leading-relaxed max-w-2xl mb-8">
+            Extract, validate, and GL-code high-volume vendor invoices before payment runs. Catch purchase order overages, tax mismatches, and duplicate submissions with deterministic rule telemetry.
+          </p>
 
-	<!-- Reviewer Fast-Batch Keyboard Action Bar -->
-	<div class="sticky bottom-6 z-20 self-center max-w-2xl w-full bg-inverse-surface text-inverse-on-surface rounded-xl shadow-xl px-space-lg py-3 flex items-center justify-between gap-space-md">
-		<div class="flex items-center gap-2 min-w-0">
-			<span class="material-symbols-outlined text-[20px] text-primary-fixed">keyboard</span>
-			<span class="font-label-sm text-label-sm text-inverse-on-surface hidden sm:inline">AP Hotkeys:</span>
-			<div class="flex items-center gap-1.5 font-label-sm text-label-sm">
-				<button
-					class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface hover:bg-surface-variant/40 disabled:opacity-40 transition-colors"
-					disabled={selected.length === 0 || batchBusy}
-					onclick={() => runBatch('approve')}
-					type="button"
-				>
-					[A] Approve
-				</button>
-				<button
-					class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface hover:bg-surface-variant/40 disabled:opacity-40 transition-colors"
-					disabled={selected.length === 0 || batchBusy}
-					onclick={() => runBatch('flag')}
-					type="button"
-				>
-					[F] Flag
-				</button>
-				<button
-					class="bg-surface-variant/20 px-1.5 py-0.5 rounded text-inverse-on-surface hover:bg-surface-variant/40 disabled:opacity-40 transition-colors"
-					disabled={selected.length === 0}
-					onclick={skipSelected}
-					type="button"
-				>
-					[S] Skip
-				</button>
-			</div>
-		</div>
-		<div class="flex items-center gap-2 shrink-0">
-			<span class="font-body-sm text-body-sm text-secondary-fixed" id="selectedCountBadge">{selected.length} selected</span>
-			<button
-				class="px-3 py-1 bg-primary text-on-primary rounded font-label-md text-label-md hover:bg-on-primary-fixed-variant disabled:opacity-40 transition-colors"
-				disabled={selected.length === 0 || batchBusy}
-				onclick={() => runBatch('approve')}
-				type="button"
-			>
-				{batchBusy ? 'Working…' : 'Batch Sign-off'}
-			</button>
-		</div>
-	</div>
+          <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto mb-6">
+            <a href="/login" class="px-5 py-3 text-sm font-medium text-white bg-[#2554D6] hover:bg-[#1B43B3] rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors">
+              <span>Open the demo</span>
+              <span class="material-symbols-outlined text-[18px]">launch</span>
+            </a>
+            <a href="/downloads/ledgerlens-sample-invoices.zip" download class="px-5 py-3 text-sm font-medium text-[#0F172A] bg-white hover:bg-[#F1F5F9] rounded-lg border border-[#E3E6EB] shadow-sm flex items-center justify-center gap-2 transition-colors">
+              <span class="material-symbols-outlined text-[18px] text-[#5B6577]">download</span>
+              <span>Download 10 sample invoices</span>
+            </a>
+          </div>
+
+          <div class="flex items-center gap-2 text-xs text-[#5B6577]">
+            <span class="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>Demo environment · illustrative data</span>
+          </div>
+        </div>
+
+        <!-- Hero Right: Live Review Card Mock -->
+        <div class="lg:col-span-5 w-full">
+          <div class="bg-white rounded-2xl border border-[#E3E6EB] shadow-sm p-5 md:p-6 transition-all hover:border-[#CBD5E1]">
+            
+            <!-- Mock Header -->
+            <div class="flex items-start justify-between border-b border-[#E3E6EB] pb-4 mb-4">
+              <div>
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="text-xs font-semibold text-[#5B6577] uppercase tracking-wider">Review Queue</span>
+                  <span class="text-xs text-[#5B6577]">·</span>
+                  <span class="text-xs font-mono font-medium text-[#0F172A]">INV-2024-098</span>
+                </div>
+                <h3 class="text-base font-semibold text-[#0F172A]">Stripe Payments UK</h3>
+                <p class="text-xs text-[#5B6577]">Matched PO: <span class="font-mono text-[#0F172A]">PO-88219</span></p>
+              </div>
+
+              <div class="text-right">
+                <span class="text-xs text-[#5B6577] block mb-0.5">Total Payable</span>
+                <span class="text-xl font-bold tracking-tight text-[#0F172A] tabular-nums">$3,812.40</span>
+              </div>
+            </div>
+
+            <!-- Status Chips -->
+            <div class="flex flex-wrap gap-2 mb-4">
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-[#E7EEFF] text-[#1D4ED8] border border-[#C7D9FE]">
+                <span class="material-symbols-outlined text-[14px]">pending_actions</span>
+                <span>Needs review</span>
+              </span>
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                <span class="material-symbols-outlined text-[14px]">cancel</span>
+                <span>1 blocking</span>
+              </span>
+              <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-[#FFFBEB] text-[#B45309] border border-[#FCD34D]">
+                <span class="material-symbols-outlined text-[14px]">warning</span>
+                <span>1 warning</span>
+              </span>
+            </div>
+
+            <!-- Line Item Breakdown Mock Table -->
+            <div class="border border-[#E3E6EB] rounded-lg overflow-hidden mb-4">
+              <table class="w-full text-left text-xs">
+                <thead class="bg-[#F1F5F9] text-[#5B6577] font-semibold border-b border-[#E3E6EB]">
+                  <tr>
+                    <th scope="col" class="py-2 px-3">Description</th>
+                    <th scope="col" class="py-2 px-3">GL Code</th>
+                    <th scope="col" class="py-2 px-3 text-right">Confidence</th>
+                    <th scope="col" class="py-2 px-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-[#E3E6EB]">
+                  <tr class="hover:bg-[#FAFBFC]">
+                    <td class="py-2.5 px-3 font-medium text-[#0F172A]">Platform Fee</td>
+                    <td class="py-2.5 px-3 font-mono text-[#5B6577]">6100-20</td>
+                    <td class="py-2.5 px-3 text-right text-emerald-700 font-semibold tabular-nums">98%</td>
+                    <td class="py-2.5 px-3 text-right text-[#0F172A] tabular-nums font-medium">$2,100.00</td>
+                  </tr>
+                  <tr class="hover:bg-[#FAFBFC]">
+                    <td class="py-2.5 px-3 font-medium text-[#0F172A]">Dispute Radar</td>
+                    <td class="py-2.5 px-3 font-mono text-[#5B6577]">6100-25</td>
+                    <td class="py-2.5 px-3 text-right text-emerald-700 font-semibold tabular-nums">94%</td>
+                    <td class="py-2.5 px-3 text-right text-[#0F172A] tabular-nums font-medium">$890.00</td>
+                  </tr>
+                  <tr class="bg-[#FFFDF5] hover:bg-[#FFFBEB]">
+                    <td class="py-2.5 px-3 font-medium text-[#B45309]">Custom Surcharge</td>
+                    <td class="py-2.5 px-3 font-mono text-[#B45309]">6050-10</td>
+                    <td class="py-2.5 px-3 text-right text-[#B91C1C] font-semibold tabular-nums">64% ⚠</td>
+                    <td class="py-2.5 px-3 text-right text-[#0F172A] tabular-nums font-medium">$500.00</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Footer Micro-Action -->
+            <div class="flex items-center justify-between pt-2 text-xs">
+              <span class="text-[#5B6577] flex items-center gap-1">
+                <span class="material-symbols-outlined text-[15px] text-[#2554D6]">shield</span>
+                Rule check V006 failed: PO overage +$312.40
+              </span>
+              <span class="font-medium text-[#2554D6] hover:underline cursor-pointer">Inspect in queue →</span>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 3) Stat Strip -->
+    <section class="border-y border-[#E3E6EB] bg-white py-12">
+      <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
+          
+          <!-- Stat 1 -->
+          <div class="border-l-2 border-[#2554D6] pl-4">
+            <span class="text-xs font-semibold uppercase tracking-wider text-[#5B6577] block mb-1">Files per upload</span>
+            <div class="text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">20</div>
+            <p class="text-xs text-[#5B6577]">10 MB PDF cap per file, validated on ingest</p>
+          </div>
+
+          <!-- Stat 2 -->
+          <div class="border-l-2 border-[#2554D6] pl-4">
+            <span class="text-xs font-semibold uppercase tracking-wider text-[#5B6577] block mb-1">Manual touch time</span>
+            <div class="text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">-78%</div>
+            <p class="text-xs text-[#5B6577]">Reviewers only examine flagged exceptions and overrides</p>
+          </div>
+
+          <!-- Stat 3 -->
+          <div class="border-l-2 border-[#2554D6] pl-4">
+            <span class="text-xs font-semibold uppercase tracking-wider text-[#5B6577] block mb-1">Duplicate payments caught</span>
+            <div class="text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">100%</div>
+            <p class="text-xs text-[#5B6577]">Zero undetected duplicate hashes before ERP commit</p>
+          </div>
+
+          <!-- Stat 4 -->
+          <div class="border-l-2 border-[#2554D6] pl-4">
+            <span class="text-xs font-semibold uppercase tracking-wider text-[#5B6577] block mb-1">First-pass PO match</span>
+            <div class="text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">94.2%</div>
+            <p class="text-xs text-[#5B6577]">Line items mapped directly to open vendor commitments</p>
+          </div>
+
+        </div>
+
+        <div class="mt-8 pt-4 border-t border-[#E3E6EB] text-center sm:text-right">
+          <span class="text-xs italic text-[#5B6577]">Illustrative figures for demo purposes.</span>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 4) The Situation (Case Study Section) -->
+    <section id="problem" class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
+      <div class="max-w-3xl mb-12">
+        <span class="text-xs font-semibold text-[#2554D6] uppercase tracking-wider block mb-2">The Operational Reality</span>
+        <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-4">
+          What massive invoice volume actually breaks
+        </h2>
+        <p class="text-base text-[#5B6577] leading-relaxed">
+          High-volume accounts payable pipelines fail quietly. When AP teams are handling hundreds of monthly invoices under tight close deadlines, exhaustive line-by-line verification becomes physically impossible. Teams inadvertently approve bills with subtle rate creeps, mismatched PO balances, and split duplicates.
+        </p>
+      </div>
+
+      <!-- 3 Breakdown Columns -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16">
+        
+        <div class="bg-white p-6 rounded-2xl border border-[#E3E6EB] shadow-sm">
+          <div class="w-10 h-10 rounded-lg bg-[#FDECEC] border border-[#F87171] text-[#B91C1C] flex items-center justify-center mb-4">
+            <span class="material-symbols-outlined text-[22px]">keyboard</span>
+          </div>
+          <h3 class="text-base font-semibold text-[#0F172A] mb-2">Manual keying and re-keying</h3>
+          <p class="text-xs sm:text-sm text-[#5B6577] leading-relaxed">
+            Staff copy-paste dates, vendor names, and totals between PDF viewers and spreadsheets. Typographical errors trigger payment delays and tax return reconciliation discrepancies.
+          </p>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl border border-[#E3E6EB] shadow-sm">
+          <div class="w-10 h-10 rounded-lg bg-[#FDECEC] border border-[#F87171] text-[#B91C1C] flex items-center justify-center mb-4">
+            <span class="material-symbols-outlined text-[22px]">rule</span>
+          </div>
+          <h3 class="text-base font-semibold text-[#0F172A] mb-2">PO and GL mismatches found after approval</h3>
+          <p class="text-xs sm:text-sm text-[#5B6577] leading-relaxed">
+            Invoices get rubber-stamped without verifying remaining purchase order authorization ceilings or correct cost-center GL classifications, requiring messy journal entry reversals later.
+          </p>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl border border-[#E3E6EB] shadow-sm">
+          <div class="w-10 h-10 rounded-lg bg-[#FDECEC] border border-[#F87171] text-[#B91C1C] flex items-center justify-center mb-4">
+            <span class="material-symbols-outlined text-[22px]">history_edu</span>
+          </div>
+          <h3 class="text-base font-semibold text-[#0F172A] mb-2">Audit trail reconstructed after the fact</h3>
+          <p class="text-xs sm:text-sm text-[#5B6577] leading-relaxed">
+            When external auditors request proof of review, controllers scramble through email chains and Slack messages to confirm who signed off on specific overages.
+          </p>
+        </div>
+
+      </div>
+
+      <!-- Baseline vs. with LedgerLens Comparison Table -->
+      <div class="bg-white rounded-2xl border border-[#E3E6EB] shadow-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-[#E3E6EB] bg-[#FAFBFC]">
+          <h3 class="text-sm font-semibold text-[#0F172A]">Baseline vs. with LedgerLens</h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs sm:text-sm">
+            <thead class="bg-[#F1F5F9] text-[#5B6577] font-semibold border-b border-[#E3E6EB]">
+              <tr>
+                <th scope="col" class="py-3.5 px-6 w-1/4">Workflow Stage</th>
+                <th scope="col" class="py-3.5 px-6 w-3/8 text-[#B91C1C]">Baseline (Manual AP)</th>
+                <th scope="col" class="py-3.5 px-6 w-3/8 text-[#15803D]">With LedgerLens</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-[#E3E6EB]">
+              <tr class="hover:bg-[#FAFBFC]">
+                <td class="py-4 px-6 font-semibold text-[#0F172A]">Intake</td>
+                <td class="py-4 px-6 text-[#5B6577]">Decentralized PDF attachments scattered across individual AP inboxes and network shared folders.</td>
+                <td class="py-4 px-6 text-[#0F172A] font-medium">Batch drag-and-drop dropzone with instant file ingestion and size/readability validation.</td>
+              </tr>
+              <tr class="hover:bg-[#FAFBFC]">
+                <td class="py-4 px-6 font-semibold text-[#0F172A]">Extraction</td>
+                <td class="py-4 px-6 text-[#5B6577]">Manual typing of header data, invoice numbers, tax IDs, and individual line descriptions.</td>
+                <td class="py-4 px-6 text-[#0F172A] font-medium">Automated OCR and table extraction pulling line items, taxes, and dates in seconds.</td>
+              </tr>
+              <tr class="hover:bg-[#FAFBFC]">
+                <td class="py-4 px-6 font-semibold text-[#0F172A]">Validation</td>
+                <td class="py-4 px-6 text-[#5B6577]">Spot-checking arithmetic and duplicate checks only when vendor balances visibly trigger alerts.</td>
+                <td class="py-4 px-6 text-[#0F172A] font-medium">Deterministic verification engine executing V001–V007 rules before reviewer sign-off.</td>
+              </tr>
+              <tr class="hover:bg-[#FAFBFC]">
+                <td class="py-4 px-6 font-semibold text-[#0F172A]">GL Coding</td>
+                <td class="py-4 px-6 text-[#5B6577]">Memory-based manual selection from 300+ general ledger codes; high variance between staff.</td>
+                <td class="py-4 px-6 text-[#0F172A] font-medium">Contextual AI-suggested GL distribution codes with transparent confidence ratings.</td>
+              </tr>
+              <tr class="hover:bg-[#FAFBFC]">
+                <td class="py-4 px-6 font-semibold text-[#0F172A]">Audit Evidence</td>
+                <td class="py-4 px-6 text-[#5B6577]">Incomplete email approvals, informal sign-offs, and retroactive spreadsheet notes.</td>
+                <td class="py-4 px-6 text-[#0F172A] font-medium">Immutable, append-only chronological audit log cryptographically verifiable per action.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 5) How It Works -->
+    <section id="how-it-works" class="border-t border-[#E3E6EB] bg-white py-16 lg:py-24">
+      <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+        
+        <div class="max-w-3xl mb-12">
+          <span class="text-xs font-semibold text-[#2554D6] uppercase tracking-wider block mb-2">Process Architecture</span>
+          <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-4">
+            From PDF to signed-off payment in five steps
+          </h2>
+          <p class="text-base text-[#5B6577]">
+            LedgerLens establishes an automated pipeline where repetitive arithmetic, duplicate matching, and baseline validation run automatically, routing only verified data to human reviewers.
+          </p>
+        </div>
+
+        <!-- 5 Steps Horizontal on Desktop / Vertical on Mobile -->
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-4 lg:gap-6 mb-10">
+          
+          <!-- Step 1 -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-5 relative flex flex-col justify-between">
+            <div>
+              <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center font-bold text-xs mb-3">
+                1
+              </div>
+              <h3 class="text-sm font-semibold text-[#0F172A] mb-1">Upload batch</h3>
+              <p class="text-xs text-[#5B6577] leading-relaxed">
+                Multi-PDF ingestion with instant format and scan-quality checks.
+              </p>
+            </div>
+            <div class="pt-4 mt-4 border-t border-[#E3E6EB] text-[#5B6577] flex items-center gap-1 text-[11px]">
+              <span class="material-symbols-outlined text-[14px]">cloud_upload</span>
+              <span>Concurrent batching</span>
+            </div>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-5 relative flex flex-col justify-between">
+            <div>
+              <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center font-bold text-xs mb-3">
+                2
+              </div>
+              <h3 class="text-sm font-semibold text-[#0F172A] mb-1">Extract line items</h3>
+              <p class="text-xs text-[#5B6577] leading-relaxed">
+                OCR parses headers, quantities, unit prices, subtotal, and tax.
+              </p>
+            </div>
+            <div class="pt-4 mt-4 border-t border-[#E3E6EB] text-[#5B6577] flex items-center gap-1 text-[11px]">
+              <span class="material-symbols-outlined text-[14px]">table_rows</span>
+              <span>Table extraction</span>
+            </div>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-5 relative flex flex-col justify-between">
+            <div>
+              <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center font-bold text-xs mb-3">
+                3
+              </div>
+              <h3 class="text-sm font-semibold text-[#0F172A] mb-1">Validate against PO and GL</h3>
+              <p class="text-xs text-[#5B6577] leading-relaxed">
+                Rules engine verifies balance ceilings, mathematical consistency, and vendor IDs.
+              </p>
+            </div>
+            <div class="pt-4 mt-4 border-t border-[#E3E6EB] text-[#5B6577] flex items-center gap-1 text-[11px]">
+              <span class="material-symbols-outlined text-[14px]">fact_check</span>
+              <span>V001–V009 suite</span>
+            </div>
+          </div>
+
+          <!-- Step 4 -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-5 relative flex flex-col justify-between">
+            <div>
+              <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center font-bold text-xs mb-3">
+                4
+              </div>
+              <h3 class="text-sm font-semibold text-[#0F172A] mb-1">Suggest GL codes</h3>
+              <p class="text-xs text-[#5B6577] leading-relaxed">
+                Predictive distribution coding mapped with calibrated confidence scores.
+              </p>
+            </div>
+            <div class="pt-4 mt-4 border-t border-[#E3E6EB] text-[#5B6577] flex items-center gap-1 text-[11px]">
+              <span class="material-symbols-outlined text-[14px]">account_tree</span>
+              <span>Confidence scoring</span>
+            </div>
+          </div>
+
+          <!-- Step 5 -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-5 relative flex flex-col justify-between">
+            <div>
+              <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center font-bold text-xs mb-3">
+                5
+              </div>
+              <h3 class="text-sm font-semibold text-[#0F172A] mb-1">Human approve or reject</h3>
+              <p class="text-xs text-[#5B6577] leading-relaxed">
+                Specialist reviews flagged discrepancies, adds audit note, and commits.
+              </p>
+            </div>
+            <div class="pt-4 mt-4 border-t border-[#E3E6EB] text-[#5B6577] flex items-center gap-1 text-[11px]">
+              <span class="material-symbols-outlined text-[14px]">how_to_reg</span>
+              <span>Reviewer sign-off</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Thin full-width append-only audit trail bar -->
+        <div class="w-full bg-[#FAFBFC] border border-[#E3E6EB] rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-2 text-[#0F172A] font-medium">
+            <span class="material-symbols-outlined text-[18px] text-[#2554D6]">verified_user</span>
+            <span>Append-only audit trail: every action, override, and state change is cryptographically chained and tamper-evident.</span>
+          </div>
+          <div class="flex items-center gap-4 text-[#5B6577] shrink-0 font-mono text-[11px]">
+            <span>SHA-256 HASH VERIFIED</span>
+            <span class="text-[#E3E6EB]">|</span>
+            <span>CHAIN LINK VERIFIED</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 6) What the AI Does — and What the Reviewer Decides -->
+    <section class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
+      <div class="text-center max-w-2xl mx-auto mb-12">
+        <span class="text-xs font-semibold text-[#2554D6] uppercase tracking-wider block mb-2">Governance &amp; Controls</span>
+        <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-3">
+          What the AI does — and what the reviewer decides
+        </h2>
+        <p class="text-sm font-semibold text-[#2554D6]">
+          AI proposes. A human decides.
+        </p>
+      </div>
+
+      <!-- Two-Column Split Card -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 rounded-2xl overflow-hidden border border-[#E3E6EB] shadow-sm">
+        
+        <!-- Left: AI Tinted Panel -->
+        <div class="bg-[#EFF4FF] p-8 lg:p-10 border-b lg:border-b-0 lg:border-r border-[#C7D9FE]">
+          <div class="flex items-center gap-2 mb-6">
+            <div class="w-8 h-8 rounded-lg bg-white text-[#2554D6] flex items-center justify-center border border-[#C7D9FE]">
+              <span class="material-symbols-outlined text-[18px]">smart_toy</span>
+            </div>
+            <div>
+              <span class="text-xs font-semibold uppercase tracking-wider text-[#1D4ED8] block">Autonomous Engine</span>
+              <h3 class="text-lg font-bold text-[#0F172A]">Automated Extraction &amp; Verification</h3>
+            </div>
+          </div>
+
+          <ul class="space-y-4 text-xs sm:text-sm text-[#0F172A]">
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#2554D6] text-[18px] shrink-0 mt-0.5">check_circle</span>
+              <span>Extracts header fields and line items directly from uploaded PDF invoices.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#2554D6] text-[18px] shrink-0 mt-0.5">check_circle</span>
+              <span>Matches each invoice to its open purchase order by PO number.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#2554D6] text-[18px] shrink-0 mt-0.5">check_circle</span>
+              <span>Checks subtotal, tax and total arithmetic against the extracted values.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#2554D6] text-[18px] shrink-0 mt-0.5">check_circle</span>
+              <span>Flags rule failures and PO limit ceiling overages prior to ledger staging.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#2554D6] text-[18px] shrink-0 mt-0.5">check_circle</span>
+              <span>Proposes general ledger (GL) accounts with explicit confidence percentages based on historical vendor entries.</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Right: Reviewer White Panel -->
+        <div class="bg-white p-8 lg:p-10">
+          <div class="flex items-center gap-2 mb-6">
+            <div class="w-8 h-8 rounded-lg bg-[#F1F5F9] text-[#0F172A] flex items-center justify-center border border-[#CBD5E1]">
+              <span class="material-symbols-outlined text-[18px]">person</span>
+            </div>
+            <div>
+              <span class="text-xs font-semibold uppercase tracking-wider text-[#5B6577] block">Human Specialist</span>
+              <h3 class="text-lg font-bold text-[#0F172A]">Reviewer Sign-off &amp; Adjudication</h3>
+            </div>
+          </div>
+
+          <ul class="space-y-4 text-xs sm:text-sm text-[#0F172A]">
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#15803D] text-[18px] shrink-0 mt-0.5">done</span>
+              <span>Resolves flagged exceptions, reviewing side-by-side original invoice PDFs with extracted values.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#15803D] text-[18px] shrink-0 mt-0.5">done</span>
+              <span>Confirms or manually overrides low-confidence GL coding classifications with one click.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#15803D] text-[18px] shrink-0 mt-0.5">done</span>
+              <span>Attaches reviewer notes to approvals and rejections for the audit trail.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#15803D] text-[18px] shrink-0 mt-0.5">done</span>
+              <span>Authorizes final approval or triggers formal vendor rejection with detailed defect reporting.</span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span class="material-symbols-outlined text-[#15803D] text-[18px] shrink-0 mt-0.5">done</span>
+              <span>Confirms the GAAP and purchase-order review checklist before approval.</span>
+            </li>
+          </ul>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 7) Validation Rules -->
+    <section id="validation" class="border-t border-[#E3E6EB] bg-white py-16 lg:py-24">
+      <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+        
+        <div class="max-w-3xl mb-12">
+          <span class="text-xs font-semibold text-[#2554D6] uppercase tracking-wider block mb-2">Deterministic Verification</span>
+          <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-4">
+            Validation rules
+          </h2>
+          <p class="text-base text-[#5B6577]">
+            Every ingested invoice is evaluated against standardized validation checks. Rules marked as blocking strictly halt autonomous processing until resolved by an AP reviewer.
+          </p>
+        </div>
+
+        <!-- Ledger Styled Table -->
+        <div class="bg-white rounded-2xl border border-[#E3E6EB] shadow-sm overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs sm:text-sm">
+              <thead class="bg-[#F1F5F9] text-[#5B6577] font-semibold border-b border-[#E3E6EB]">
+                <tr>
+                  <th scope="col" class="py-3 px-4 font-mono w-24">Rule ID</th>
+                  <th scope="col" class="py-3 px-4">Check</th>
+                  <th scope="col" class="py-3 px-4 w-32">Severity</th>
+                  <th scope="col" class="py-3 px-4">What happens</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-[#E3E6EB]">
+                
+                                <!-- V001 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V001</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Line items sum matches subtotal</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Flags arithmetic discrepancies between extracted line totals and the declared subtotal.</td>
+                </tr>
+
+                <!-- V002 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V002</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Subtotal + tax = total</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Verifies header arithmetic consistency before committing amounts to payable journals.</td>
+                </tr>
+
+                <!-- V003 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V003</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Tax rate reasonable</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FFFBEB] text-[#B45309] border border-[#FCD34D]">
+                      warning
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Flags unusual effective tax rates for reviewer attention.</td>
+                </tr>
+
+                <!-- V004 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V004</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">No duplicate invoice</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Blocks a second submission of the same vendor invoice number.</td>
+                </tr>
+
+                <!-- V005 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V005</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">PO number present</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Halts non-PO invoices for discretionary authorization review before payment.</td>
+                </tr>
+
+                <!-- V006 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V006</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Total within PO tolerance</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Blocks invoices that exceed the open purchase-order ceiling beyond tolerance.</td>
+                </tr>
+
+                <!-- V007 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V007</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Vendor matches PO vendor</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Flags a vendor mismatch between the invoice and its purchase order.</td>
+                </tr>
+
+                <!-- V008 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V008</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Due date not before invoice date</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FDECEC] text-[#B91C1C] border border-[#F87171]">
+                      blocking
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Rejects impossible payment terms before ledger staging.</td>
+                </tr>
+
+                <!-- V009 -->
+                <tr class="h-[44px] hover:bg-[#FAFBFC] transition-colors">
+                  <td class="py-2.5 px-4 font-mono font-medium text-[#0F172A]">V009</td>
+                  <td class="py-2.5 px-4 font-medium text-[#0F172A]">Quantity × price = amount</td>
+                  <td class="py-2.5 px-4">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-[#FFFBEB] text-[#B45309] border border-[#FCD34D]">
+                      warning
+                    </span>
+                  </td>
+                  <td class="py-2.5 px-4 text-[#5B6577]">Flags line-level arithmetic that does not reconcile.</td>
+                </tr>
+
+</tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 8) Outcomes Section -->
+    <section class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-24">
+      <div class="max-w-3xl mb-12">
+        <span class="text-xs font-semibold text-[#2554D6] uppercase tracking-wider block mb-2">Impact &amp; Efficiency</span>
+        <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-4">
+          What changes operationally
+        </h2>
+        <p class="text-base text-[#5B6577]">
+          Implementing deterministic verification shifts accounts payable from passive manual data entry to active risk control.
+        </p>
+      </div>
+
+      <!-- 3 Outcome Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+        
+        <div class="bg-white p-6 rounded-2xl border border-[#E3E6EB] shadow-sm flex flex-col justify-between">
+          <div>
+            <div class="text-3xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">&lt; 3 mins</div>
+            <h3 class="text-base font-semibold text-[#0F172A] mb-2">Fewer manual touches</h3>
+            <p class="text-xs sm:text-sm text-[#5B6577] leading-relaxed">
+              Standard invoices with high PO match and valid GL distributions move straight through to batch approval in seconds rather than days.
+            </p>
+          </div>
+          <div class="pt-4 mt-6 border-t border-[#E3E6EB] text-xs text-[#2554D6] font-medium flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px]">touch_app</span>
+            <span>Touchless queue throughput</span>
+          </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl border border-[#E3E6EB] shadow-sm flex flex-col justify-between">
+          <div>
+            <div class="text-3xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">Pre-commit</div>
+            <h3 class="text-base font-semibold text-[#0F172A] mb-2">Exceptions surfaced before payment</h3>
+            <p class="text-xs sm:text-sm text-[#5B6577] leading-relaxed">
+              Discrepancies in taxes, rates, and quantities are captured at ingestion, terminating erroneous disbursements before checks or wires leave treasury.
+            </p>
+          </div>
+          <div class="pt-4 mt-6 border-t border-[#E3E6EB] text-xs text-[#2554D6] font-medium flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px]">warning_amber</span>
+            <span>Pre-disbursement gating</span>
+          </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-2xl border border-[#E3E6EB] shadow-sm flex flex-col justify-between">
+          <div>
+            <div class="text-3xl font-bold tracking-tight text-[#0F172A] tabular-nums mb-1">100% Chain</div>
+            <h3 class="text-base font-semibold text-[#0F172A] mb-2">Audit-ready evidence</h3>
+            <p class="text-xs sm:text-sm text-[#5B6577] leading-relaxed">
+              Every reviewer note, override justification, and OCR extraction confidence rating is packaged into an exportable immutable audit record.
+            </p>
+          </div>
+          <div class="pt-4 mt-6 border-t border-[#E3E6EB] text-xs text-[#2554D6] font-medium flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px]">security</span>
+            <span>Tamper-evident audit chain</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Generic Blockquote Callout -->
+      <div class="bg-white rounded-2xl border border-[#E3E6EB] p-8 shadow-sm relative">
+        <div class="flex items-start gap-4">
+          <span class="material-symbols-outlined text-[#2554D6] text-3xl shrink-0">format_quote</span>
+          <div>
+            <p class="text-base sm:text-lg text-[#0F172A] italic leading-relaxed mb-4">
+              "Before LedgerLens, our controllers spent the first four days of every month end hunting down who authorized off-contract cloud billing overages. Having automated PO ceiling enforcement and immutable justification logs converted audit preparation from a multi-day fire drill into a 30-second CSV export."
+            </p>
+            <div class="text-xs font-semibold text-[#5B6577] tracking-wider uppercase">
+              AP Leadership, Multi-Entity Pilot
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- 9) Roadmap: Where this goes next -->
+    <section id="roadmap" class="border-t border-[#E3E6EB] bg-white py-16 lg:py-24">
+      <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8">
+        
+        <div class="max-w-3xl mb-12">
+          <span class="text-xs font-semibold text-[#2554D6] uppercase tracking-wider block mb-2">Engineering Trajectory</span>
+          <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-4">
+            Where this goes next
+          </h2>
+          <p class="text-base text-[#5B6577]">
+            LedgerLens is designed for evolutionary integration into high-assurance enterprise ERP architectures.
+          </p>
+        </div>
+
+        <!-- Three Columns: Now / Next / Later -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          
+          <!-- Column 1: Now -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-4">
+                <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center">
+                  <span class="material-symbols-outlined text-[18px]">verified</span>
+                </div>
+                <div>
+                  <span class="text-xs font-semibold uppercase tracking-wider text-[#2554D6] block">Current Release</span>
+                  <h3 class="text-lg font-bold text-[#0F172A]">Now</h3>
+                </div>
+              </div>
+
+              <ul class="space-y-3 text-xs sm:text-sm text-[#5B6577]">
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#2554D6] text-[16px] mt-0.5 shrink-0">check</span>
+                  <span>Human-in-the-loop review workspace</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#2554D6] text-[16px] mt-0.5 shrink-0">check</span>
+                  <span>Cryptographic immutable audit chain</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#2554D6] text-[16px] mt-0.5 shrink-0">check</span>
+                  <span>CSV export for approved AP batches</span>
+                </li>
+              </ul>
+            </div>
+            <div class="pt-4 mt-6 border-t border-[#E3E6EB] text-xs font-mono text-[#5B6577]">
+              v4.12 Demo Build
+            </div>
+          </div>
+
+          <!-- Column 2: Next -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-4">
+                <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center">
+                  <span class="material-symbols-outlined text-[18px]">update</span>
+                </div>
+                <div>
+                  <span class="text-xs font-semibold uppercase tracking-wider text-[#2554D6] block">In Development</span>
+                  <h3 class="text-lg font-bold text-[#0F172A]">Next</h3>
+                </div>
+              </div>
+
+              <ul class="space-y-3 text-xs sm:text-sm text-[#5B6577]">
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#2554D6] text-[16px] mt-0.5 shrink-0">arrow_right_alt</span>
+                  <span>ERP write-back (NetSuite / SAP S/4HANA)</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#2554D6] text-[16px] mt-0.5 shrink-0">arrow_right_alt</span>
+                  <span>Cross-batch duplicate hash detection</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#2554D6] text-[16px] mt-0.5 shrink-0">arrow_right_alt</span>
+                  <span>SAML SSO and role-based approval tiers</span>
+                </li>
+              </ul>
+            </div>
+            <div class="pt-4 mt-6 border-t border-[#E3E6EB] text-xs font-mono text-[#5B6577]">
+              Q3 2025 Planned Rollout
+            </div>
+          </div>
+
+          <!-- Column 3: Later -->
+          <div class="bg-[#FAFBFC] border border-[#E3E6EB] rounded-2xl p-6 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center gap-2 mb-4">
+                <div class="w-8 h-8 rounded-lg bg-[#EFF4FF] border border-[#C7D9FE] text-[#2554D6] flex items-center justify-center">
+                  <span class="material-symbols-outlined text-[18px]">schedule</span>
+                </div>
+                <div>
+                  <span class="text-xs font-semibold uppercase tracking-wider text-[#5B6577] block">Vision &amp; Scale</span>
+                  <h3 class="text-lg font-bold text-[#0F172A]">Later</h3>
+                </div>
+              </div>
+
+              <ul class="space-y-3 text-xs sm:text-sm text-[#5B6577]">
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#5B6577] text-[16px] mt-0.5 shrink-0">more_horiz</span>
+                  <span>Multi-entity international tax rules</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#5B6577] text-[16px] mt-0.5 shrink-0">more_horiz</span>
+                  <span>SLA-based queue routing and escalations</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#5B6577] text-[16px] mt-0.5 shrink-0">more_horiz</span>
+                  <span>Vendor-facing self-service dispute portal</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="material-symbols-outlined text-[#5B6577] text-[16px] mt-0.5 shrink-0">more_horiz</span>
+                  <span>Payment-run batching with treasury sync</span>
+                </li>
+              </ul>
+            </div>
+            <div class="pt-4 mt-6 border-t border-[#E3E6EB] text-xs font-mono text-[#5B6577]">
+              Enterprise Horizon
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+    <!-- 10) Demo CTA Band -->
+    <section class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-16 lg:py-20">
+      <div class="bg-[#EFF4FF] rounded-2xl border border-[#C7D9FE] p-8 md:p-12 lg:p-16 text-center max-w-4xl mx-auto shadow-sm">
+        
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-[#C7D9FE] text-[#1D4ED8] text-xs font-semibold uppercase tracking-wider mb-4">
+          <span class="material-symbols-outlined text-[16px]">science</span>
+          <span>Test The Verification Engine</span>
+        </span>
+
+        <h2 class="text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-[#0F172A] mb-4">
+          Try it with invoices that are designed to fail
+        </h2>
+
+        <p class="text-sm sm:text-base text-[#5B6577] max-w-xl mx-auto mb-8">
+          The ZIP contains 10 invoices with intentional PO, tax, GL and duplicate errors. Test how the engine flags every issue and isolates exceptions for reviewer sign-off.
+        </p>
+
+        <!-- CTA Buttons -->
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
+          <a href="/downloads/ledgerlens-sample-invoices.zip" download class="w-full sm:w-auto px-6 py-3 text-sm font-semibold text-white bg-[#2554D6] hover:bg-[#1B43B3] rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors">
+            <span class="material-symbols-outlined text-[18px]">folder_zip</span>
+            <span>Download sample invoices (ZIP)</span>
+          </a>
+          <a href="/login" class="w-full sm:w-auto px-6 py-3 text-sm font-semibold text-[#0F172A] bg-white hover:bg-[#F1F5F9] rounded-lg border border-[#E3E6EB] shadow-sm flex items-center justify-center gap-2 transition-colors">
+            <span>Open the demo</span>
+            <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+          </a>
+        </div>
+
+        <!-- Credential line -->
+        <div class="inline-flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-6 bg-white border border-[#C7D9FE] rounded-lg px-4 py-2.5 text-xs text-[#5B6577]">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-[#0F172A]">Demo Reviewer:</span>
+            <code class="font-mono bg-[#FAFBFC] px-2 py-0.5 rounded border border-[#E3E6EB] text-[#0F172A]">{demoEmail}</code>
+            <button type="button" class="text-[#5B6577] hover:text-[#0F172A]" title="Copy Email" aria-label="Copy Email" onclick={copyEmail}>
+              <span class="material-symbols-outlined text-[16px]">{copied ? 'check' : 'content_copy'}</span>
+            </button>
+          </div>
+          <span class="hidden sm:inline text-[#CBD5E1]">|</span>
+          <span>No password required — one-click sign-in</span>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 11) Footer -->
+  <footer class="border-t border-[#E3E6EB] bg-white py-8">
+    <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-[#5B6577]">
+      <div>
+        © 2025 LedgerLens Inc. Accounts Payable &amp; Ledger Automation.
+      </div>
+      <div class="flex items-center gap-4">
+        <span class="inline-flex items-center gap-1.5 font-medium text-[#0F172A]">
+          <span class="material-symbols-outlined text-[16px] text-emerald-600">verified_user</span>
+          <span>Audit-ready evidence</span>
+        </span>
+        <span class="text-[#E3E6EB]">|</span>
+        <span class="font-mono text-[11px] text-[#5B6577]">
+          Audit Trail v4.12
+        </span>
+      </div>
+    </div>
+  </footer>
 </div>
-
-<svelte:window onkeydown={onKeydown} />

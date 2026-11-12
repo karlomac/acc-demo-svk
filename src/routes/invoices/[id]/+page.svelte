@@ -21,9 +21,7 @@
 	const overage = $derived(po ? invoice.total > po.total_amount : false)
 
 	let showPdfModal = $state(false)
-	let glDropdownOpen = $state(false)
 	let line3Confirmed = $state(false)
-	let selectedGlCode = $derived(lines[2]?.final_account_code ?? '')
 
 	function money(n: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n ?? 0)
@@ -49,13 +47,6 @@
 		return c.severity === 'blocking' ? `${base} bg-error-container text-on-error-container font-semibold` : `${base} bg-tertiary-fixed text-tertiary font-semibold`
 	}
 
-	function toggleGlDropdown() {
-		glDropdownOpen = !glDropdownOpen
-	}
-	function selectGlCode(code: string) {
-		selectedGlCode = code
-		glDropdownOpen = false
-	}
 	function toggleLine3Confirmed() {
 		line3Confirmed = !line3Confirmed
 	}
@@ -80,7 +71,7 @@
 	<div class="flex flex-col gap-space-sm">
 		<div class="flex items-center justify-between">
 			<a
-				href={resolve('/')}
+				href={resolve('/queue')}
 				class="inline-flex items-center gap-1.5 text-primary hover:text-on-primary-fixed-variant font-label-md text-label-md transition-colors group"
 			>
 				<span class="material-symbols-outlined text-[18px] transition-transform group-hover:-translate-x-0.5">arrow_back</span>

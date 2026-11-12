@@ -19,10 +19,11 @@
 		path === '/' ? page.url.pathname === '/' : page.url.pathname.startsWith(path)
 </script>
 
+{#if user}
 <nav class="sticky top-0 z-20 bg-surface-container-lowest border-b border-outline-variant/40">
 	<div class="w-full max-w-[1600px] mx-auto px-margin h-16 flex items-center justify-between gap-gutter">
 		<div class="flex items-center gap-8 min-w-0">
-			<a href="/" class="flex items-center gap-2 shrink-0">
+			<a href="/queue" class="flex items-center gap-2 shrink-0">
 				<span class="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center">
 					<span class="material-symbols-outlined text-[20px]">menu_book</span>
 				</span>
@@ -34,8 +35,8 @@
 				</span>
 				<div class="hidden md:flex items-center gap-6 font-label-md text-label-md">
 					<a
-						href="/"
-						class={`pb-1 border-b-2 transition-colors ${isActive('/') && page.url.pathname === '/' ? 'text-primary border-primary' : 'text-on-surface-variant border-transparent hover:text-primary'}`}
+						href="/queue"
+						class={`pb-1 border-b-2 transition-colors ${page.url.pathname === '/queue' ? 'text-primary border-primary' : 'text-on-surface-variant border-transparent hover:text-primary'}`}
 					>
 						Invoices
 					</a>
@@ -86,6 +87,7 @@
 		{/if}
 	</div>
 </nav>
+{/if}
 
 {@render children()}
 
@@ -96,7 +98,7 @@
 			<div class="flex items-center gap-gutter">
 				<span class="flex items-center gap-1">
 					<span class="material-symbols-outlined text-[16px]">verified_user</span>
-					SOC2 Type II Certified
+					Tamper-evident audit chain
 				</span>
 				<span>Audit Trail v4.12</span>
 			</div>

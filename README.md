@@ -35,6 +35,17 @@ npm run dev
 # → http://localhost:5173
 ```
 
+## Routes
+
+| Path | Access | Purpose |
+|------|--------|---------|
+| `/` | public | Landing page / case study (signed-in users redirect to `/queue`) |
+| `/login` | public | One-click demo entry |
+| `/queue` | auth | Invoice queue, filters, pagination, batch actions |
+| `/invoices/[id]` | auth | Review, GL override, approve/reject |
+| `/audit` | auth | Tamper-evident audit log |
+| `/downloads/ledgerlens-sample-invoices.zip` | public | 10 sample PDFs with intentional errors |
+
 ## Demo Credentials
 
 | Role | Email | Password |
@@ -59,8 +70,10 @@ npx playwright test # E2E tests
 ```
 src/
 ├── routes/
-│   ├── +page.svelte          # Upload queue (main page)
-│   ├── +page.server.ts       # Load + upload action
+│   ├── +page.svelte          # Public landing / case study
+│   ├── queue/                # Upload queue + review actions
+│   │   ├── +page.svelte
+│   │   └── +page.server.ts
 │   ├── login/                # Auth pages
 │   ├── api/invoices/[id]/process/  # Extraction pipeline endpoint
 │   └── invoices/[id]/        # Detail page (review, approve/reject)
@@ -75,6 +88,7 @@ src/
 │   └── components/           # UI components (StatusChip, Icon, etc.)
 scripts/
 ├── generate-sample-invoices.ts  # Creates 10 test PDFs with intentional errors
+static/downloads/               # ledgerlens-sample-invoices.zip (10 PDFs)
 tests/                          # Vitest + Playwright
 pocketbase/                     # PocketBase binary + pb_data (gitignored)
 ```
@@ -92,11 +106,13 @@ npx tsx scripts/generate-sample-invoices.ts
 |----|------|----------|
 | V001 | Line items sum matches subtotal | blocking |
 | V002 | Subtotal + tax = total | blocking |
-| V003 | PO exists in system | blocking |
-| V004 | PO total covers invoice | warning |
-| V005 | PO number present on invoice | blocking |
-| V006 | All GL codes valid | warning |
-| V007 | No duplicate invoice number per vendor | blocking |
+| V003 | Tax rate reasonable | warning |
+| V004 | No duplicate invoice | blocking |
+| V005 | PO number present | blocking |
+| V006 | Total within PO tolerance | blocking |
+| V007 | Vendor matches PO vendor | blocking |
+| V008 | Due date not before invoice date | blocking |
+| V009 | Quantity × price = amount | warning |
 
 ## Audit Log
 
